@@ -3,16 +3,6 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-# def upload_to_profile(instance, filename):
-#     # e.g. uploads/profile_photos/<user-id>/<YYYY>/<MM>/<filename>
-#     return f"uploads/profile_photos/{instance.applicant_id if hasattr(instance, 'applicant_id') else instance.id}/{timezone.now().year}/{timezone.now().month}/{filename}"
-
-# def upload_to_nin_slip(instance, filename):
-#     return f"uploads/nin_slips/{instance.applicant_id if hasattr(instance, 'applicant_id') else instance.id}/{timezone.now().year}/{timezone.now().month}/{filename}"
-
-# def upload_to_uploaded_certificate(instance, filename):
-#     return f"uploads/old_certificates/{instance.applicant_id if hasattr(instance, 'applicant_id') else instance.id}/{timezone.now().year}/{timezone.now().month}/{filename}"
-
 class Role(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)  # applicant, lg_admin, super_admin, immigration_officer
@@ -114,10 +104,10 @@ class CertificateApplication(models.Model):
     village = models.CharField(max_length=150, blank=True, null=True)
     residential_address = models.TextField(blank=True, null=True)
     landmark = models.CharField(max_length=255, blank=True, null=True)
-    letter_from_traditional_ruler = models.FileField(upload_to="uploads/letters/%Y/%m/%d/", blank=True, null=True)
+    letter_from_traditional_ruler = models.URLField(blank=True, null=True)
 
-    profile_photo = models.URLField(max_length=500, blank=True, null=True)
-    nin_slip = models.URLField(max_length=500, blank=True, null=True)
+    profile_photo = models.URLField(blank=True, null=True)
+    nin_slip = models.URLField(blank=True, null=True)
 
     application_status = models.CharField(max_length=50, choices=STATUS_CHOICES, default="pending")
     payment_status = models.CharField(max_length=50, choices=PAYMENT_STATUS, default="unpaid")
@@ -169,7 +159,7 @@ class Certificate(models.Model):
     issue_date = models.DateField(default=timezone.now)
     expiry_date = models.DateField(blank=True, null=True)
     verification_code = models.CharField(max_length=100, unique=True)
-    file_path = models.FileField(upload_to="uploads/certificates/%Y/%m/%d/")
+    file_path = models.URLField(null=True, blank=True)
     is_revoked = models.BooleanField(default=False)
     revoked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -200,12 +190,12 @@ class DigitizationRequest(models.Model):
     email = models.EmailField(blank=True, null=True)
     state = models.ForeignKey(State, on_delete=models.SET_NULL, null=True)
     local_government = models.ForeignKey(LocalGovernment, on_delete=models.SET_NULL, null=True)
-    uploaded_certificate = models.URLField(max_length=500, blank=True, null=True)
+    uploaded_certificate = models.URLField(blank=True, null=True)
     certificate_reference_number = models.CharField(max_length=100, blank=True, null=True)
 
     # NEW FIELDS for digitization requests
-    profile_photo = models.URLField(max_length=500, blank=True, null=True)
-    nin_slip = models.URLField(max_length=500, blank=True, null=True)
+    profile_photo = models.URLField(blank=True, null=True)
+    nin_slip = models.URLField(blank=True, null=True)
 
     payment_status = models.CharField(max_length=50, choices=PAYMENT_STATUS, default="unpaid")
     verification_status = models.CharField(max_length=50, choices=VERIFICATION_STATUS, default="pending")
@@ -222,7 +212,7 @@ class DigitizationCertificate(models.Model):
     verification_code = models.CharField(max_length=100, unique=True)
     issue_date = models.DateField(default=timezone.now)
     expiry_date = models.DateField(blank=True, null=True)
-    file_path = models.FileField(upload_to="uploads/digitized_certificates/%Y/%m/%d/")
+    file_path = models.URLField(null=True, blank=True)
     certificate_type = models.CharField(max_length=50, default="digitized")
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
