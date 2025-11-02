@@ -48,7 +48,7 @@ class CustomUser(AbstractUser):
         choices=[("active", "Active"), ("suspended", "Suspended")],
         default="active",
     )
-    role_id = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, related_name="users")
+    role = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, related_name="users")
    
     # class Meta:
     #     ordering = ["-created_at"]
