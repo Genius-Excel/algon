@@ -2,6 +2,8 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
+from django.contrib.auth.models import AbstractUser
+
 
 class Role(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -12,6 +14,68 @@ class Role(models.Model):
 
     def __str__(self):
         return self.name
+    
+
+class CustomUser(AbstractUser):
+    email = models.EmailField(unique=True)
+    phone_number = models.CharField(max_length=20, blank=True)
+    profile_image = models.URLField(blank=True, null=True)
+    alternative_number = models.CharField(max_length=20, blank=True, null=True)
+    email_verified = models.BooleanField(default=False)
+    account_status = models.CharField(
+        max_length=20,
+        choices=[("active", "Active"), ("suspended", "Suspended")],
+        default="active",
+    )
+    role_id = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, related_name="users")
+   
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.email
+
+    def get_full_name(self):
+        return f"{self.first_name} {self.last_name}"
+    
+    
+    def has_permission(self, permission_name: str) -> bool:
+        """
+        Check if the user has a specific permission.
+        Args:
+            permission_name (str): The permission codename to check.
+        Returns:
+            bool: True if user has the permission, False otherwise.
+        """
+        return permission_name in self.get_permissions()
+    
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = [ 'username' ]
+
+    def save(self, *args, **kwargs):
+        if not self.username:
+            self.username = self.generate_unique_username()
+        
+        super().save(*args, **kwargs)
+
+
+    def generate_unique_username(self):
+        """This method generates a unique username for the user upon trying to
+           create an object of the `CustomUser` class.
+           It queries the database to check if the username already exist.
+           Returns:
+               unique_username (str): username generated from provided email address.
+        """
+        base_username = self.email.split('@')[0]
+
+        unique_username = base_username
+        counter = 1
+
+        while CustomUser.objects.filter(username=unique_username).exists():
+            unique_username = f"{base_username}{counter}"
+            counter += 1
+
+        return unique_username
 
 class State(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
