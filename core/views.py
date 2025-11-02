@@ -102,6 +102,10 @@ def register_user(request, user_type):
         if user_type == 'super-admin':
             role, _ = Role.objects.get_or_create(name='super-admin')
             user.role = role
+        
+        if user_type == 'applicant':
+            role, _ = Role.objects.get_or_create(name='applicant')
+            user.role = role
 
         user.save()
         create_audit_log(
@@ -117,13 +121,9 @@ def register_user(request, user_type):
         return Response({'message': f"{user.role.name} account created successfully!", 
                           'data': [
                                 {   'user_id': user.id,
-                                    'first_name': user.first_name,
-                                    'last_name': user.last_name,
                                     'email': user.email, 
                                     'role': user.role.name,
                                     'phone_number': user.phone_number,
-                                    'email_verified': user.email_verified
-
                                 }
                           ]},status=status.HTTP_201_CREATED)
     
