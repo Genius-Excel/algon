@@ -83,6 +83,14 @@ def register_user(request, user_type):
         except ObjectDoesNotExist:
             pass
 
+        # Try cath any existing user NIN number.
+        try:
+            existing_user = User.objects.filter(nin=nin).exists()
+            if existing_user:
+                return Response({'message': 'NIN already exist'}, status=status.HTTP_400_BAD_REQUEST)
+        except ObjectDoesNotExist:
+            pass
+
         user = User.objects.create_user(
             username=generate_username(),
             nin = data.get('nin', None),
