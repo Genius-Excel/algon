@@ -81,15 +81,14 @@ def register_user(request, user_type):
 
         user = User.objects.create_user(
             username=generate_username(),
-            first_name=data['first_name'],
-            last_name=data['last_name'],
+            nin = data.get('nin', None),
             email=data['email'],
             phone_number=data['phone_number'],
             password=data['password'],
         )
 
-        if user_type == 'admin':
-            role, _ = Role.objects.get_or_create(name='Admin')
+        if user_type == 'super-admin':
+            role, _ = Role.objects.get_or_create(name='super-admin')
             user.role = role
 
         user.save()
