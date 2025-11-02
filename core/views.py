@@ -52,6 +52,10 @@ def register_user(request, user_type):
         email = data['email']
         password = data['password']
         phone_number = data['phone_number']
+        nin = data.get('nin', None)
+
+        if user_type != 'super-admin' and not nin:
+            return Response({'error': 'NIN is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             validate_email(email)
