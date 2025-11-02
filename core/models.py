@@ -42,7 +42,7 @@ class CustomUser(AbstractUser):
     profile_image = models.URLField(blank=True, null=True)
     alternative_number = models.CharField(max_length=20, blank=True, null=True)
     email_verified = models.BooleanField(default=False)
-    nin = models.CharField(max_length=20, blank=True, null=True)
+    nin = models.CharField(max_length=20, blank=True, null=True, unique=True)
     account_status = models.CharField(
         max_length=20,
         choices=[("active", "Active"), ("suspended", "Suspended")],
@@ -106,6 +106,7 @@ class State(models.Model):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
+    code = models.CharField(max_length=50, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -468,7 +469,7 @@ class AuditLog(models.Model):
     applications, updating fees), along with contextual data such as IP
     address and user agent for compliance and traceability.
     """
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     action = models.CharField(max_length=150)  # e.g. "Approved Certificate", "Updated Fee"
