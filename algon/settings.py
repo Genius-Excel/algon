@@ -31,7 +31,7 @@ INSTALLED_APPS = [
 ]
 
 
-# AUTH_USER_MODEL = "core.CustomUser"
+AUTH_USER_MODEL = "core.CustomUser"
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", cast=lambda v: [s.strip() for s in v.split(",")])
 

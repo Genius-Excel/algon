@@ -30,8 +30,8 @@ class CustomUser(AbstractUser):
     )
     role_id = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, related_name="users")
    
-    class Meta:
-        ordering = ["-created_at"]
+    # class Meta:
+    #     ordering = ["-created_at"]
 
     def __str__(self):
         return self.email
