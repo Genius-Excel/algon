@@ -22,6 +22,7 @@ class CustomUser(AbstractUser):
     profile_image = models.URLField(blank=True, null=True)
     alternative_number = models.CharField(max_length=20, blank=True, null=True)
     email_verified = models.BooleanField(default=False)
+    nin = models.CharField(max_length=20, blank=True, null=True)
     account_status = models.CharField(
         max_length=20,
         choices=[("active", "Active"), ("suspended", "Suspended")],
