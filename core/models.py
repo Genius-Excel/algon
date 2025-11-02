@@ -461,28 +461,32 @@ class VerificationLog(models.Model):
     verification_status = models.CharField(max_length=50)
     verified_at = models.DateTimeField(default=timezone.now)
 
+
 class AuditLog(models.Model):
-    """
-    Records system activities for auditing and security monitoring.
-
-    The audit log captures user actions across modules (e.g., approving
-    applications, updating fees), along with contextual data such as IP
-    address and user agent for compliance and traceability.
-    """
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
-    action = models.CharField(max_length=150)  # e.g. "Approved Certificate", "Updated Fee"
-    module = models.CharField(max_length=100, blank=True, null=True)
-    target_table = models.CharField(max_length=100, blank=True, null=True)
-    target_id = models.UUIDField(null=True, blank=True)
-    ip_address = models.CharField(max_length=45, blank=True, null=True)
-    user_agent = models.TextField(blank=True, null=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name="audit_logs")
+    action_type = models.CharField(
+        max_length=50,
+        choices=[
+            ("create", "Create"),
+            ("update", "Update"),
+            ("delete", "Delete"),
+            ("login", "Login"),
+            ("logout", "Logout"),
+            ("view", "View"),
+        ],
+    )
+    table_name = models.CharField(max_length=150)
+    record_id = models.UUIDField(blank=True, null=True)
+    changes = models.JSONField(blank=True, null=True)
     description = models.TextField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    user_agent = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
-        indexes = [
-            models.Index(fields=["user"]),
-            models.Index(fields=["action"]),
-        ]
+        db_table = "audit_logs"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user} - {self.action_type} - {self.table_name}"
