@@ -1,3 +1,11 @@
+"""
+Models for the Local Government Certificate Issuance Platform.
+
+This module defines all database models for user management, local government
+administration, certificate application workflows, digitization requests,
+transactions, auditing, and verification processes.
+"""
+
 import uuid
 from django.conf import settings
 from django.db import models
@@ -6,6 +14,12 @@ from django.contrib.auth.models import AbstractUser
 
 
 class Role(models.Model):
+    """
+    Represents the role assigned to users within the system.
+
+    Roles define the level of access and permissions available to a user,
+    such as 'Applicant', 'Local Government Admin', 'Super Admin', or 'Immigration Officer'.
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)  # applicant, lg_admin, super_admin, immigration_officer
     description = models.CharField(max_length=250, blank=True, null=True)
@@ -17,6 +31,12 @@ class Role(models.Model):
     
 
 class CustomUser(AbstractUser):
+    """
+    Custom user model extending Django's AbstractUser.
+
+    Stores authentication details and additional user attributes like email,
+    phone numbers, NIN, account status, and assigned role.
+    """
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True)
     profile_image = models.URLField(blank=True, null=True)
@@ -79,6 +99,11 @@ class CustomUser(AbstractUser):
         return unique_username
 
 class State(models.Model):
+    """
+    Represents a state within country.
+
+    Each state may contain multiple Local Government Areas (LGAs).
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -88,6 +113,13 @@ class State(models.Model):
         return self.name
 
 class LocalGovernment(models.Model):
+    """
+    Represents a Local Government Area (LGA) within a state.
+
+    Each LGA is associated with one state and can have multiple admins,
+    applications, and dynamic requirement fields.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     state = models.ForeignKey(State, related_name="local_governments", on_delete=models.CASCADE)
@@ -101,6 +133,12 @@ class LocalGovernment(models.Model):
         return f"{self.name} ({self.state.name})"
 
 class AdminPermission(models.Model):
+    """
+    Defines specific permissions granted to a Local Government Admin.
+
+    Permissions determine which actions the admin can perform, such as approving
+    applications, managing settings, or exporting data.
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     admin = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="admin_permissions")
     local_government = models.ForeignKey(LocalGovernment, on_delete=models.CASCADE, related_name="admin_permissions")
@@ -111,6 +149,13 @@ class AdminPermission(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 class LGFee(models.Model):
+    """
+    Defines application and service fees for a Local Government Area.
+
+    LG admins can configure the fees for certificate applications,
+    digitization, and certificate regeneration.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     local_government = models.OneToOneField(LocalGovernment, on_delete=models.CASCADE, related_name="fees")
     application_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
@@ -121,6 +166,13 @@ class LGFee(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 class LGDynamicField(models.Model):
+    """
+    Represents a dynamic requirement field defined by a Local Government Admin.
+
+    Allows each LGA to define additional application fields dynamically,
+    such as 'Proof of Residency' or 'Letter from Community Head'.
+    """
+
     FIELD_TYPES = (
         ("text", "Text"),
         ("number", "Number"),
@@ -144,7 +196,15 @@ class LGDynamicField(models.Model):
     def __str__(self):
         return f"{self.local_government.name} - {self.field_label}"
 
+
 class CertificateApplication(models.Model):
+    """
+    Represents a certificate application submitted by an applicant.
+
+    Each application contains applicant data, documents, and associated
+    review/approval information.
+    """
+
     STATUS_CHOICES = (
         ("pending", "Pending"),
         ("under_review", "Under Review"),
@@ -191,7 +251,14 @@ class CertificateApplication(models.Model):
     def __str__(self):
         return f"{self.full_name} - {self.nin}"
 
+
 class ApplicationFieldResponse(models.Model):
+    """
+    Stores applicant responses for dynamic fields defined by the Local Government.
+
+    Each record corresponds to one dynamic field response for a specific application.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     application = models.ForeignKey(CertificateApplication, on_delete=models.CASCADE, related_name="field_responses")
     field = models.ForeignKey(LGDynamicField, on_delete=models.CASCADE)
@@ -199,6 +266,14 @@ class ApplicationFieldResponse(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Payment(models.Model):
+    """
+    Records all payment transactions related to certificate applications.
+
+    Each payment entry is linked to an applicant and a specific certificate application.
+    It captures transaction details such as amount, payment gateway used,
+    transaction status, and timestamps for auditing purposes.
+    """
+     
     STATUS = (
         ("pending", "Pending"),
         ("successful", "Successful"),
@@ -217,6 +292,14 @@ class Payment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class Certificate(models.Model):
+    """
+    Represents an issued certificate for an approved application.
+
+    Each certificate contains a unique verification code that can be validated
+    by third parties (e.g., embassies). Certificates may be original, digitized,
+    or regenerated and can be revoked by authorized administrators.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     application = models.OneToOneField(CertificateApplication, on_delete=models.CASCADE, related_name="certificate")
     certificate_number = models.CharField(max_length=50, unique=True)
@@ -234,7 +317,17 @@ class Certificate(models.Model):
             models.Index(fields=["verification_code"]),
         ]
 
+
+
 class DigitizationRequest(models.Model):
+    """
+    Represents a request from an applicant to digitize a previously issued hardcopy certificate.
+
+    Applicants upload a scanned version of their existing certificate (and optionally
+    a profile photo and NIN slip) to generate a verified digital copy for a reduced fee.
+    The request passes through a review process handled by Local Government Admins.
+    """
+
     VERIFICATION_STATUS = (
         ("pending", "Pending"),
         ("under_review", "Under Review"),
@@ -270,7 +363,15 @@ class DigitizationRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+
 class DigitizationCertificate(models.Model):
+    """
+    Represents the digital version of a previously hardcopy certificate.
+
+    Created automatically after a digitization request is approved, this model
+    stores a new verification code and links to the uploaded digital certificate file.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     digitization_request = models.OneToOneField(DigitizationRequest, on_delete=models.CASCADE, related_name="digitized_certificate")
     certificate_number = models.CharField(max_length=50, unique=True)
@@ -283,7 +384,15 @@ class DigitizationCertificate(models.Model):
     approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+
 class DigitizationPayment(models.Model):
+    """
+    Records payment information for a digitization request.
+
+    Each record tracks the amount, payment reference, gateway used, and current
+    payment status associated with a single digitization transaction.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     digitization_request = models.ForeignKey(DigitizationRequest, on_delete=models.CASCADE, related_name="payments")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -294,7 +403,16 @@ class DigitizationPayment(models.Model):
     payment_date = models.DateTimeField(default=timezone.now)
     created_at = models.DateTimeField(auto_now_add=True)
 
+
 class Transaction(models.Model):
+    """
+    Stores all system-wide financial transactions for traceability and reporting.
+
+    This model provides a unified record of payments related to applications,
+    digitization, and other transaction types (e.g., refunds). It is useful for
+    analytics, reconciliation, and payment tracking across the entire system.
+    """
+
     STATUS = (
         ("pending", "Pending"),
         ("successful", "Successful"),
@@ -324,7 +442,16 @@ class Transaction(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+
 class VerificationLog(models.Model):
+    """
+    Tracks all certificate verification attempts.
+
+    Each record logs who performed the verification, their role,
+    and whether the verification was successful. It supports both
+    original and digitized certificates.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     certificate = models.ForeignKey(Certificate, on_delete=models.CASCADE, null=True, blank=True)
     digitization_certificate = models.ForeignKey(DigitizationCertificate, on_delete=models.CASCADE, null=True, blank=True)
@@ -334,6 +461,14 @@ class VerificationLog(models.Model):
     verified_at = models.DateTimeField(default=timezone.now)
 
 class AuditLog(models.Model):
+    """
+    Records system activities for auditing and security monitoring.
+
+    The audit log captures user actions across modules (e.g., approving
+    applications, updating fees), along with contextual data such as IP
+    address and user agent for compliance and traceability.
+    """
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     action = models.CharField(max_length=150)  # e.g. "Approved Certificate", "Updated Fee"
