@@ -63,6 +63,16 @@ def register_user(request, user_type):
 
         if user_type != 'super-admin' and not nin:
             return Response({'error': 'NIN is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if user_type != 'super-admin':
+            if not nin:
+                return Response({'error': 'NIN is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not validate_nin_number(nin):
+                return Response({'error': 'Invalid NIN number, must be 11 digits'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if User.objects.filter(nin=nin).exists():
+                return Response({'error': 'NIN already exists'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             validate_email(email)
@@ -89,18 +99,6 @@ def register_user(request, user_type):
                 return Response({'message': 'phone number already exist'}, status=status.HTTP_400_BAD_REQUEST)
         except ObjectDoesNotExist:
             pass
-
-        # Try cath any existing user NIN number.
-        try:
-            existing_user = User.objects.filter(nin=nin).exists()
-            if existing_user:
-                return Response({'message': 'NIN already exist'}, status=status.HTTP_400_BAD_REQUEST)
-        except ObjectDoesNotExist:
-            pass
-
-        if not validate_nin_number(nin):
-            return Response({'error': 'Invalid NIN number, must be a valid 11 digit'}, 
-                            status=status.HTTP_400_BAD_REQUEST)
         
         user = User.objects.create_user(
             username=generate_username(),
