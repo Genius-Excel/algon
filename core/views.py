@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError, ObjectDoesNotExist
 from django.contrib.auth.password_validation import validate_password, ValidationError as PasswordValidationError
 from django.contrib.auth import password_validation, authenticate, login, logout
 from .models import Role
-from .utils import generate_username, create_audit_log
+from .utils import generate_username, create_audit_log, validate_nin_number
 from .serializers import UserRegistrationSerializer
 
 User = get_user_model()
@@ -91,6 +91,10 @@ def register_user(request, user_type):
         except ObjectDoesNotExist:
             pass
 
+        if not validate_nin_number(nin):
+            return Response({'error': 'Invalid NIN number, must be a valid 11 digit'}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
         user = User.objects.create_user(
             username=generate_username(),
             nin = data.get('nin', None),
