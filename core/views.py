@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.conf import settings
 from django.http import JsonResponse
 from rest_framework import status
 from rest_framework.response import Response
@@ -10,8 +11,12 @@ from django.core.exceptions import ValidationError, ObjectDoesNotExist
 from django.contrib.auth.password_validation import validate_password, ValidationError as PasswordValidationError
 from django.contrib.auth import password_validation, authenticate, login, logout
 from .models import Role
-from .utils import generate_username, create_audit_log, validate_nin_number
+from .utils import (generate_username, create_audit_log, 
+                    validate_nin_number, generate_email_confirmation_token,
+                    send_email_with_html_template
+                    )
 from .serializers import UserRegistrationSerializer, UserLoginSerializer, UserLogoutSerializer, ChangePasswordSerializer
+from .throttles import ResetEmailTwoCallsPerHour
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework.permissions import IsAuthenticated
 
@@ -303,6 +308,44 @@ def reset_password(request):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+@api_view(['POST'])
+@throttle_classes([ResetEmailTwoCallsPerHour])
+def password_reset_email(request):
+    """
+    Handles the password reset process.
+    This function processes POST requests with an email address and sends a
+    password reset link to the user's email address. The link contains a token
+    that is valid for a limited time, after which the user can reset their password.
+    Args:
+        request (HttpRequest): The HTTP request object containing the email address.
+    Returns:
+        Response: A Response object with a success message and HTTP 200 status if
+                  the email is successfully sent, or an error message and HTTP 400
+                  status if there are validation errors or other issues.
+    """
+    if request.method == "POST":
+        email = request.data.get('email', None)
+        if email is None:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            user = User.objects.get(email=email)
+        except ObjectDoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        token = generate_email_confirmation_token(user)
+        reset_url = f"{settings.FRONTEND_BASE_URL_PASSWORD_RESET}?token={token}"
+        # send email to user
+        subject = 'Password Reset'
+        template_file = 'templates/core/password-reset.html'
+        template_context = {'first_name': user.first_name,
+                             'last_name': user.last_name,
+                             'reset_url': reset_url,
+                            }
+        sender_name = 'ALGON Certificate'
+        email_status = send_email_with_html_template(template_file, template_context, email, subject, sender_name)
+
+        return Response({'message': 'Password reset email sent', 'email_status': email_status}, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])
@@ -358,3 +401,5 @@ def change_password(request):
         )
 
         return Response({'message': 'Password changed successfully'}, status=status.HTTP_200_OK)
+
+
