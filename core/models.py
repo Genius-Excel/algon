@@ -37,14 +37,14 @@ class CustomUser(AbstractUser):
     Stores authentication details and additional user attributes like email,
     phone numbers, NIN, account status, and assigned role.
     """
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True)
     profile_image = models.URLField(blank=True, null=True)
     alternative_number = models.CharField(max_length=20, blank=True, null=True)
     email_verified = models.BooleanField(default=False)
-    nin = models.CharField(max_length=20, blank=True, null=True, unique=True)
+    nin = models.CharField(max_length=20, blank=True, null=True, db_index=True)
     account_status = models.CharField(
         max_length=20,
         choices=[("active", "Active"), ("suspended", "Suspended")],
