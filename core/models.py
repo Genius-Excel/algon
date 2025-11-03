@@ -625,4 +625,3 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.action_type} - {self.table_name}"
-

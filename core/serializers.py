@@ -136,10 +136,7 @@ class CreateApplicationSerializer(serializers.Serializer):
         )
 
         for field in dynamic_fields:
-            if field.field_name not in attrs or attrs[field.field_name] in [
-                None,
-                "",
-            ]:
+            if field.field_name not in attrs.get(field.field_name):
                 raise serializers.ValidationError(
                     {
                         field.field_name: f"{field.field_label} is "

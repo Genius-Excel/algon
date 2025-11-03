@@ -480,7 +480,7 @@ def change_password(request):
     """
     Change the password for an authenticated user.
     Args:
-        request: The HTTP request object containing the current
+        request (HttpRequest): The HTTP request object containing the current
         and new passwords.
     Returns:
         Response: A DRF Response object with a success
