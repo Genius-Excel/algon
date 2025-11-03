@@ -11,7 +11,7 @@ from django.contrib.auth.password_validation import validate_password, Validatio
 from django.contrib.auth import password_validation, authenticate, login, logout
 from .models import Role
 from .utils import generate_username, create_audit_log, validate_nin_number
-from .serializers import UserRegistrationSerializer, UserLoginSerializer, UserLogoutSerializer
+from .serializers import UserRegistrationSerializer, UserLoginSerializer, UserLogoutSerializer, ChangePasswordSerializer
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework.permissions import IsAuthenticated
 
@@ -243,4 +243,118 @@ def logout_user(request):
             return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+
+
+@api_view(['POST'])
+def reset_password(request):
+    """
+    Handle password reset requests.
+    This view function processes POST requests to reset a user's password.
+    It validates the provided passwords, checks if they match, and updates
+    the user's password if all validations pass.
+    Args:
+        request (HttpRequest): The HTTP request object containing the password data.
+        token (str): The token used to authenticate the password reset request.
+    Returns:
+        Response: A DRF Response object with a success or error message and appropriate HTTP status code.
+    Possible Responses:
+        - 200 OK: Password reset successful.
+        - 400 Bad Request: Password fields are required, passwords do not match, or validation errors.
+    """
+
+    if request.method == "POST":
+        token = request.GET.get('token', None)
+
+        if token is None:
+            return Response({"message": "Token is required"}, status=status.HTTP_400_BAD_REQUEST)
+    
+        password1 = request.data.get('password1', None)
+        password2 = request.data.get('password2', None)
+
+        if not password1 or not password2:
+            return Response({'message': 'Password fields are required'}, status=status.HTTP_400_BAD_REQUEST)
         
+        if password1 != password2:
+            return Response({'message': 'Passwords do not match'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # validate password
+        try:
+            password_validation.validate_password(password1)
+        except ValidationError as e:
+            return Response({'error': e.messages}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token.payload.get('user_id', None)
+            user = get_object_or_404(User, id=user_id)
+            
+            user.set_password(password1)
+            user.save()
+            create_audit_log(
+                user=user,
+                action_type='update',
+                table_name='User',
+                record_id=user.id,
+                description=f'User {user.email} reset their password',
+                request=request
+            )
+            return Response({'message': 'Password reset successful'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    """
+    Change the password for an authenticated user.
+    Args:
+        request (HttpRequest): The HTTP request object containing the current and new passwords.
+    Returns:
+        Response: A DRF Response object with a success or error message and appropriate HTTP status code.
+    """
+    if request.method == "POST":
+        user_id = request.user.id
+        try:
+            user = User.objects.get(id=user_id)
+        except ObjectDoesNotExist:
+            return Response({'message': 'No user with such ID'}, status=status.HTTP_404_NOT_FOUND)
+        
+        password_change_serializer = ChangePasswordSerializer(data=request.data)
+
+        if not password_change_serializer.is_valid():
+            return Response(password_change_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        data = password_change_serializer.validated_data
+        current_password = data.get('current_password')
+        new_password = data.get('new_password')
+        confirm_new_password = data.get('confirm_password')
+
+        if not current_password or not new_password or not confirm_new_password:
+            return Response({'error': 'All password fields are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_password != confirm_new_password:
+            return Response({'error': 'New passwords do not match'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.check_password(current_password):
+            return Response({'error': 'Current password is incorrect'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            password_validation.validate_password(new_password, user)
+        except ValidationError as e:
+            return Response({'error': e.messages}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+        create_audit_log(
+            user=user,
+            action_type='update',
+            table_name='User',
+            record_id=user.id,
+            description=f'User {user.email} changed their password',
+            request=request
+        )
+
+        return Response({'message': 'Password changed successfully'}, status=status.HTTP_200_OK)
