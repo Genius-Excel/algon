@@ -168,3 +168,13 @@ def create_audit_log(
         user_agent=user_agent,
         created_at=timezone.now()
     )
+
+
+
+def validate_nin_number(nin: str) -> bool:
+   """This function validates the lenght of NIN
+      number of an applicant.
+   """
+   if len(nin) == 11 and nin.isdigit():
+      return True
+   return False
