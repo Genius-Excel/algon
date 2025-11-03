@@ -3,7 +3,9 @@ from rest_framework import serializers
 
 from core.models import (
     CertificateApplication,
+    DigitizationRequest,
     LGDynamicField,
+    LGFee,
     LocalGovernment,
     State,
 )
@@ -43,9 +45,11 @@ class CreateApplicationSerializer(serializers.Serializer):
     are present before creating a CertificateApplication record.
 
     Static Fields:
-        - full_name (str): Full name of the applicant. Must include first and last name.
+        - full_name (str): Full name of the applicant.
+            Must include first and last name.
         - date_of_birth (date): Applicant's date of birth.
-        - phone_number (str): Applicant's phone number. Must match a valid phone pattern.
+        - phone_number (str): Applicant's phone number.
+            Must match a valid phone pattern.
         - email_address (str): Applicant's email address.
         - state (str): Name of the state. Must exist in the database.
         - lga (str): Name of the local government. Must exist in the database
@@ -65,7 +69,8 @@ class CreateApplicationSerializer(serializers.Serializer):
         - validate_full_name(value): Ensures full name contains at least first
         and last name.
         - validate_state(value): Confirms state exists in the database.
-        - validate_lga(value): Confirms local government exists in the database.
+        - validate_lga(value): Confirms local government exists
+        in the database.
         - validate(attrs): Performs cross-field validation, checks
         required dynamic fields.
         - create(validated_data): Creates a CertificateApplication instance,
@@ -91,8 +96,12 @@ class CreateApplicationSerializer(serializers.Serializer):
     lga = serializers.CharField(max_length=50, required=True)
     village = serializers.CharField(max_length=150, required=True)
     letter_from_traditional_ruler = serializers.URLField()
+    profile_photo = serializers.URLField()
+    nin_slip = serializers.URLField()
+    address = serializers.CharField(max_length=100)
+    landmark = serializers.CharField(max_length=50)
 
-    def validate_lga(self, value):
+    def validate_lga(self, value) -> str | None:
         """validate that the local government is in the DB"""
         if LocalGovernment.objects.filter(name__iexact=value.strip()).exists():
             return value
@@ -101,7 +110,7 @@ class CreateApplicationSerializer(serializers.Serializer):
                 "LocalGovernment matching query does not exist"
             )
 
-    def validate_state(self, value):
+    def validate_state(self, value) -> str | None:
         """validate the provided state"""
         if State.objects.filter(name__iexact=value.strip()).exists():
             return value
@@ -110,16 +119,16 @@ class CreateApplicationSerializer(serializers.Serializer):
                 "State matching query does not exist"
             )
 
-    def validate_full_name(self, value):
+    def validate_full_name(self, value) -> str | None:
         """validate the full name"""
-        full_name_len = value.strip().split(" ")
+        full_name_len = len(value.strip().split(" "))
         if full_name_len < 2:
             raise serializers.ValidationError(
                 "Full name must include both first and last names."
             )
         return value
 
-    def validate(self, attrs):
+    def validate(self, attrs) -> dict | None:
         # validate if the lga requires some fields
         # trad_ruler_letter = attrs.get("letter_from_traditional_ruler")
         local_govt_name = attrs.get("lga")
@@ -151,13 +160,52 @@ class CreateApplicationSerializer(serializers.Serializer):
 
 
 class LGDynamicFieldSerializer(serializers.ModelSerializer):
-    field = ["__all__"]
 
     class Meta:
         model = LGDynamicField
+        fields = "__all__"
+
+
+class LGFeeSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = LGFee
+        fields = "__all__"
+
+    def to_representation(self, instance) -> dict:
+        """
+        Customize the serialized output of an LGFee instance.
+
+        This method extends the default serialization behavior provided by
+        DRF's `ModelSerializer` to include additional, human-readable fields.
+
+        Specifically:
+            - Replaces the `local_government` foreign key with the
+              local government's name.
+            - Adds the related state's name under the key `"state"`.
+
+        Args:
+            instance (LGFee): The LGFee model instance being serialized.
+
+        Returns:
+            dict: A dictionary representation of the LGFee object with
+                  enriched contextual information suitable for API responses.
+        """
+        instance_dict = super().to_representation(instance)
+        instance_dict["state"] = instance.local_government.state.name
+        instance_dict["local_government"] = instance.local_government.name
+
+        return instance_dict
 
 
 class AdditionalRequirementSerializer(serializers.Serializer):
 
     class Meta:
         model = LGDynamicField
+
+
+class DigitizationRequestSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        fields = "__all__"
+        model = DigitizationRequest

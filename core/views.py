@@ -10,6 +10,7 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
+from celery.result import AsyncResult
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.core.validators import validate_email
@@ -24,22 +25,28 @@ from django.contrib.auth import (
     login,
     logout,
 )
+
+from core.tasks import async_cloudinary_upload
 from .models import (
     Certificate,
     CertificateApplication,
     LGDynamicField,
+    LGFee,
     LocalGovernment,
     Role,
 )
 from .utils import (
     generate_username,
     create_audit_log,
+    upload_file_to_cloudinary,
     validate_nin_number,
     generate_email_confirmation_token,
     send_email_with_html_template,
 )
 from .serializers import (
+    DigitizationRequestSerializer,
     LGDynamicFieldSerializer,
+    LGFeeSerializer,
     UserRegistrationSerializer,
     UserLoginSerializer,
     UserLogoutSerializer,
@@ -568,25 +575,26 @@ def create_certificate_application(request):
     Returns: HTTPResponse 201 when application has been created
 
     """
-    if request.method == "POST":
-        # confirm if user is an applicant, does not have an
-        # existing approved certificate application request
-        user = request.user
-        if user.role != "applicant":
-            return Response(
-                {"error": "User is not an applicant"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        if CertificateApplication.objects.filter(
-            applicant=user, application_status="approved"
-        ).exists():
-            return Response(
-                {"error": "Approved application already exists"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        serializer = CreateApplicationSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+    # confirm if user is an applicant, does not have an
+    # existing approved certificate application request
+    user = request.user
+    role = getattr(user.role, "name", "")
+    if role != "applicant":
+        return Response(
+            {"error": "User is not an applicant"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if CertificateApplication.objects.filter(
+        applicant=user, application_status="approved"
+    ).exists():
+        return Response(
+            {"error": "Approved application already exists"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    serializer = CreateApplicationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    else:
         serializer.save(applicant=user)
         create_audit_log(
             user=user,
@@ -594,7 +602,6 @@ def create_certificate_application(request):
             table_name="CertificateApplication",
             description=f"New certificate application initiated by {user.email}",
         )
-
         return Response(
             {
                 "data": serializer.data,
@@ -694,7 +701,7 @@ def verify_certificate(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    certificate = get_object_or_404(Certificate, certificate_id=cert_id)
+    certificate = get_object_or_404(Certificate, id=cert_id)
     create_audit_log(
         user=user,
         action_type="view",
@@ -714,3 +721,93 @@ def verify_certificate(request):
             "verification_code": certificate.verification_code,
         }
     )
+
+
+@api_view(["GET", "POST", "PUT"])
+@permission_classes([IsAuthenticated])
+def local_goverment_fees(request):
+    """Retrieve and set the application fee for applying for certification
+    Args:
+        request: The Request Object
+
+        returns:
+            GET - 200 if found or 404 if not found
+            POST:
+                201 (Created) - Fee found
+                403 (Forbidden) - User with lesser privileges attempts to modify data
+                400 (BAD Request) - Malformed data sent
+
+            PUT:
+                200 (OK) - modified
+
+        Returns:
+            Response
+    """
+
+    if request.method == "GET":
+        lga_name = request.query_params.get("lga")
+        lg_id = request.query_params.get("local_government_id")
+
+        if not lga_name and not lg_id:
+            return Response(
+                {"error": "Must provide 'lga' or 'local_government_id'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if lg_id:
+            lg = LocalGovernment.objects.filter(id=lg_id).first()
+        else:
+            lg = LocalGovernment.objects.filter(
+                name__iexact=lga_name.strip()
+            ).first()
+
+        if not lg:
+            return Response(
+                {"error": "Local Government not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        fee = LGFee.objects.filter(local_government=lg).first()
+        if not fee:
+            return Response(
+                {"error": "Fee not set for this Local Government"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = LGFeeSerializer(fee)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def handle_uploads(request):
+    uploaded_file = request.FILES.get("file")
+    file_type = request.data.get("file_type")
+
+    if not uploaded_file or not file_type:
+        return Response(
+            {"error": "File and file_type are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    task = async_cloudinary_upload.delay(uploaded_file.read(), file_type)
+    return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(["GET"])
+def upload_status(request, task_id):
+    result = AsyncResult(task_id)
+    data = {"status": result.status}
+    if result.ready() and result.successful():
+        data["file_url"] = result.result
+    return Response(data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def certificate_digitization(request):
+    user = request.user
+    serializer = DigitizationRequestSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(applicant=user)
+    return Response({"data": serializer.data}, status=status.HTTP_201_CREATED)

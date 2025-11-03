@@ -11,7 +11,6 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from django.contrib.auth.models import AbstractUser
-from cloudinary.models import CloudinaryField
 
 
 class Role(models.Model):
@@ -19,7 +18,8 @@ class Role(models.Model):
     Represents the role assigned to users within the system.
 
     Roles define the level of access and permissions available to a user,
-    such as 'Applicant', 'Local Government Admin', 'Super Admin', or 'Immigration Officer'.
+    such as 'Applicant', 'Local Government Admin', 'Super Admin',
+    or 'Immigration Officer'.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -45,9 +45,9 @@ class CustomUser(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True)
-    # profile_image = CloudinaryField(blank=True, null=True)
+    # profile_image = models.URLField(blank=True, null=True)
 
-    profile_image = CloudinaryField(blank=True, null=True)
+    profile_image = models.URLField(blank=True, null=True)
     alternative_number = models.CharField(max_length=20, blank=True, null=True)
     email_verified = models.BooleanField(default=False)
     nin = models.CharField(max_length=20, blank=True, null=True, db_index=True)
@@ -283,10 +283,10 @@ class CertificateApplication(models.Model):
     village = models.CharField(max_length=150, blank=True, null=True)
     residential_address = models.TextField(blank=True, null=True)
     landmark = models.CharField(max_length=255, blank=True, null=True)
-    letter_from_traditional_ruler = CloudinaryField(blank=True, null=True)
+    letter_from_traditional_ruler = models.URLField(blank=True, null=True)
 
-    profile_photo = CloudinaryField(blank=True, null=True)
-    nin_slip = CloudinaryField(blank=True, null=True)
+    profile_photo = models.URLField(blank=True, null=True)
+    nin_slip = models.URLField(blank=True, null=True)
 
     application_status = models.CharField(
         max_length=50, choices=STATUS_CHOICES, default="pending"
@@ -395,7 +395,7 @@ class Certificate(models.Model):
     issue_date = models.DateField(default=timezone.now)
     expiry_date = models.DateField(blank=True, null=True)
     verification_code = models.CharField(max_length=100, unique=True)
-    file_path = CloudinaryField(null=True, blank=True)
+    file_path = models.URLField(null=True, blank=True)
     is_revoked = models.BooleanField(default=False)
     revoked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -442,14 +442,14 @@ class DigitizationRequest(models.Model):
     local_government = models.ForeignKey(
         LocalGovernment, on_delete=models.SET_NULL, null=True
     )
-    uploaded_certificate = CloudinaryField(blank=True, null=True)
+    uploaded_certificate = models.URLField(blank=True, null=True)
     certificate_reference_number = models.CharField(
         max_length=100, blank=True, null=True
     )
 
     # NEW FIELDS for digitization requests
-    profile_photo = CloudinaryField(blank=True, null=True)
-    nin_slip = CloudinaryField(blank=True, null=True)
+    profile_photo = models.URLField(blank=True, null=True)
+    nin_slip = models.URLField(blank=True, null=True)
 
     payment_status = models.CharField(
         max_length=50, choices=PAYMENT_STATUS, default="unpaid"
@@ -488,7 +488,7 @@ class DigitizationCertificate(models.Model):
     verification_code = models.CharField(max_length=100, unique=True)
     issue_date = models.DateField(default=timezone.now)
     expiry_date = models.DateField(blank=True, null=True)
-    file_path = CloudinaryField(null=True, blank=True)
+    file_path = models.URLField(null=True, blank=True)
     certificate_type = models.CharField(max_length=50, default="digitized")
     approved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
