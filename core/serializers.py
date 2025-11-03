@@ -18,3 +18,8 @@ class UserLogoutSerializer(serializers.Serializer):
     access_token = serializers.CharField(required=True)
     refresh_token = serializers.CharField(required=True)
 
+
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(max_length=100)
+    new_password = serializers.CharField(max_length=100)
+    confirm_password = serializers.CharField(max_length=100)
