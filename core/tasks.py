@@ -4,13 +4,10 @@ from core.utils import upload_file_to_cloudinary
 
 
 @shared_task(bind=True, max_retries=3)
-def async_cloudinary_upload(self, file_bytes, file_name, file_type):
-    from io import BytesIO
+def cloudinary_upload_task(self, file_path, file_type):
 
     try:
-        file_obj = BytesIO(file_bytes)
-        file_obj.name = file_name
-        url = upload_file_to_cloudinary(file_obj)
+        url = upload_file_to_cloudinary(file_path)
         # url = response["secure_url"]
 
         # if file_type == "nin_slip":

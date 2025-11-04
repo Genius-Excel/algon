@@ -1,4 +1,3 @@
-from django.core.serializers.base import SerializationError
 from rest_framework import serializers
 
 from core.models import (
@@ -9,6 +8,7 @@ from core.models import (
     LocalGovernment,
     State,
 )
+from core.utils import validate_nin_number
 
 
 class UserRegistrationSerializer(serializers.Serializer):
@@ -91,17 +91,23 @@ class CreateApplicationSerializer(serializers.Serializer):
         },
         required=True,
     )
-    email_address = serializers.EmailField(required=True)
+    email = serializers.EmailField(required=True)
     state = serializers.CharField(required=True)
-    lga = serializers.CharField(max_length=50, required=True)
+    local_government = serializers.CharField(max_length=50, required=True)
     village = serializers.CharField(max_length=150, required=True)
     letter_from_traditional_ruler = serializers.URLField()
     profile_photo = serializers.URLField()
     nin_slip = serializers.URLField()
-    address = serializers.CharField(max_length=100)
+    nin = serializers.CharField()
+    residential_address = serializers.CharField(max_length=100)
     landmark = serializers.CharField(max_length=50)
 
-    def validate_lga(self, value) -> str | None:
+    def validate_nin(self, value):
+        if not validate_nin_number(value):
+            raise serializers.ValidationError("NIN not valid")
+        return value
+
+    def validate_local_government(self, value) -> str | None:
         """validate that the local government is in the DB"""
         if LocalGovernment.objects.filter(name__iexact=value.strip()).exists():
             return value
@@ -131,15 +137,19 @@ class CreateApplicationSerializer(serializers.Serializer):
     def validate(self, attrs) -> dict | None:
         # validate if the lga requires some fields
         # trad_ruler_letter = attrs.get("letter_from_traditional_ruler")
-        local_govt_name = attrs.get("lga")
+        local_govt_name = attrs.get("local_government")
         state_name = attrs.get("state")
+        state = State.objects.filter(name__iexact=state_name).first()
+        if not state:
+            raise serializers.ValidationError("State not found")
+        attrs.update({"state": state})
         local_govt = LocalGovernment.objects.filter(
             name=local_govt_name.strip(),
-            state__name__iexact=state_name.strip(),
+            state=state,
         ).first()
         if not local_govt:
             raise serializers.ValidationError("Local government not found")
-
+        attrs.update({"local_government": local_govt})
         dynamic_fields = LGDynamicField.objects.filter(
             local_government=local_govt, is_required=True
         )
@@ -156,6 +166,7 @@ class CreateApplicationSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
+        print(validated_data)
         return CertificateApplication.objects.create(**validated_data)
 
 
@@ -226,3 +237,8 @@ class DigitizationRequestSerializer(serializers.ModelSerializer):
         # fields = "__all__"
         exclude = ("applicant",)
         model = DigitizationRequest
+
+
+class FileUploadSerializer(serializers.Serializer):
+    file = serializers.FileField(required=True)
+    file_type = serializers.CharField(max_length=30)

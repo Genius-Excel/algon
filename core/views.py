@@ -1,4 +1,6 @@
 from http.client import HTTPResponse
+import tempfile
+from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.db import transaction
 from django.http.request import HttpRequest
 from django.shortcuts import render
@@ -27,7 +29,7 @@ from django.contrib.auth import (
     logout,
 )
 
-from core.tasks import async_cloudinary_upload
+from core.tasks import cloudinary_upload_task
 from .models import (
     Certificate,
     CertificateApplication,
@@ -50,6 +52,7 @@ from .utils import (
 )
 from .serializers import (
     DigitizationRequestSerializer,
+    FileUploadSerializer,
     LGDynamicFieldSerializer,
     LGFeeSerializer,
     UserRegistrationSerializer,
@@ -789,25 +792,51 @@ def local_goverment_fees(request):
         serializer = LGFeeSerializer(fee)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    # TODO: add post requues for lg admin to update the pricing
+
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def handle_uploads(request):
-    uploaded_file = request.FILES.get("file")
-    file_type = request.data.get("file_type")
+    """
+    Handles file uploads asynchronously via Celery.
 
+    Expects multipart/form-data with:
+        - file: the uploaded file
+        - file_type: the purpose (e.g., 'nin_slip', 'profile_photo')
+
+    Returns:
+        {
+            "task_id": "<celery_task_id>"
+        }
+    """
+    serializer = FileUploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    uploaded_file = serializer.validated_data.get("file")
+    file_type = serializer.validated_data.get("file_type")
     if not uploaded_file or not file_type:
         return Response(
             {"error": "File and file_type are required"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    task = async_cloudinary_upload.delay(uploaded_file.read(), file_type)
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        for chunk in uploaded_file.chunks():
+            tmp_file.write(chunk)
+        tmp_file_path = tmp_file.name
+    task = cloudinary_upload_task.delay(tmp_file_path, file_type)
     return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
 
 @api_view(["GET"])
-def upload_status(request, task_id):
+def upload_status(request, task_id) -> Response:
+    """Request status for an asynchronous upload
+    Args:
+        request: Request
+    Returns:
+        Response object with the data dict
+    """
     result = AsyncResult(task_id)
     data = {"status": result.status}
     if result.ready() and result.successful():
