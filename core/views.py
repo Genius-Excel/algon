@@ -938,13 +938,7 @@ def initiate_payment(request):
         reference = generate_random_id(
             prefix="TRX", use_separator=True, separator="-"
         )
-        transaction_entry = Transaction.objects.create(
-            user=user,
-            reference=reference,
-            payment_type=payment_type,
-            amount=amount,
-            # currency=currency,
-        )
+
         if payment_type.lower() == "digitization":
             digitization_request = DigitizationRequest.objects.filter(
                 id=model_id
@@ -955,14 +949,19 @@ def initiate_payment(request):
                     payment_reference=reference,
                     payment_gateway=payment_gateway,
                     user=user,
+                    digitization_request=digitization_request,
+                )
+                create_audit_log(
+                    user=user,
+                    action_type="create",
+                    table_name="DigitizationPayment",
+                    description="Payment initiated by user for digitizing certificate",
                 )
                 # send to the relevant payment api
-            return Response(
-                {
-                    "message": f"{payment_type.capitalize()} payment initiated",
-                    "payment_id": str(payment_entry.id),
-                    "transaction_id": str(transaction_entry.id),
-                    "payment_reference": transaction_entry.reference,
-                },
-                status=status.HTTP_201_CREATED,
-            )
+                return Response(
+                    {
+                        "message": f"{payment_type.capitalize()} payment initiated",
+                        "payment_id": str(payment_entry.id),
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
