@@ -18,17 +18,21 @@ class Role(models.Model):
     Represents the role assigned to users within the system.
 
     Roles define the level of access and permissions available to a user,
-    such as 'Applicant', 'Local Government Admin', 'Super Admin', or 'Immigration Officer'.
+    such as 'Applicant', 'Local Government Admin', 'Super Admin',
+    or 'Immigration Officer'.
     """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=100, unique=True)  # applicant, lg_admin, super_admin, immigration_officer
+    name = models.CharField(
+        max_length=100, unique=True
+    )  # applicant, lg_admin, super_admin, immigration_officer
     description = models.CharField(max_length=250, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
-    
+
 
 class CustomUser(AbstractUser):
     """
@@ -41,6 +45,8 @@ class CustomUser(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True)
+    # profile_image = models.URLField(blank=True, null=True)
+
     profile_image = models.URLField(blank=True, null=True)
     alternative_number = models.CharField(max_length=20, blank=True, null=True)
     email_verified = models.BooleanField(default=False)
@@ -50,8 +56,10 @@ class CustomUser(AbstractUser):
         choices=[("active", "Active"), ("suspended", "Suspended")],
         default="active",
     )
-    role = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, related_name="users")
-   
+    role = models.ForeignKey(
+        Role, on_delete=models.SET_NULL, null=True, related_name="users"
+    )
+
     # class Meta:
     #     ordering = ["-created_at"]
 
@@ -60,8 +68,7 @@ class CustomUser(AbstractUser):
 
     def get_full_name(self):
         return f"{self.first_name} {self.last_name}"
-    
-    
+
     def has_permission(self, permission_name: str) -> bool:
         """
         Check if the user has a specific permission.
@@ -71,25 +78,24 @@ class CustomUser(AbstractUser):
             bool: True if user has the permission, False otherwise.
         """
         return permission_name in self.get_permissions()
-    
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = [ 'username' ]
+
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["username"]
 
     def save(self, *args, **kwargs):
         if not self.username:
             self.username = self.generate_unique_username()
-        
-        super().save(*args, **kwargs)
 
+        super().save(*args, **kwargs)
 
     def generate_unique_username(self):
         """This method generates a unique username for the user upon trying to
-           create an object of the `CustomUser` class.
-           It queries the database to check if the username already exist.
-           Returns:
-               unique_username (str): username generated from provided email address.
+        create an object of the `CustomUser` class.
+        It queries the database to check if the username already exist.
+        Returns:
+            unique_username (str): username generated from provided email address.
         """
-        base_username = self.email.split('@')[0]
+        base_username = self.email.split("@")[0]
 
         unique_username = base_username
         counter = 1
@@ -100,12 +106,14 @@ class CustomUser(AbstractUser):
 
         return unique_username
 
+
 class State(models.Model):
     """
     Represents a state within country.
 
     Each state may contain multiple Local Government Areas (LGAs).
     """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
     code = models.CharField(max_length=50, null=True)
@@ -114,6 +122,7 @@ class State(models.Model):
 
     def __str__(self):
         return self.name
+
 
 class LocalGovernment(models.Model):
     """
@@ -125,7 +134,9 @@ class LocalGovernment(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
-    state = models.ForeignKey(State, related_name="local_governments", on_delete=models.CASCADE)
+    state = models.ForeignKey(
+        State, related_name="local_governments", on_delete=models.CASCADE
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -135,6 +146,7 @@ class LocalGovernment(models.Model):
     def __str__(self):
         return f"{self.name} ({self.state.name})"
 
+
 class AdminPermission(models.Model):
     """
     Defines specific permissions granted to a Local Government Admin.
@@ -142,14 +154,24 @@ class AdminPermission(models.Model):
     Permissions determine which actions the admin can perform, such as approving
     applications, managing settings, or exporting data.
     """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="admin_permissions")
-    local_government = models.ForeignKey(LocalGovernment, on_delete=models.CASCADE, related_name="admin_permissions")
+    admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="admin_permissions",
+    )
+    local_government = models.ForeignKey(
+        LocalGovernment,
+        on_delete=models.CASCADE,
+        related_name="admin_permissions",
+    )
     can_approve = models.BooleanField(default=True)
     can_export = models.BooleanField(default=True)
     can_manage_settings = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
 
 class LGFee(models.Model):
     """
@@ -160,13 +182,27 @@ class LGFee(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    local_government = models.OneToOneField(LocalGovernment, on_delete=models.CASCADE, related_name="fees")
-    application_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    digitization_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    regeneration_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    local_government = models.OneToOneField(
+        LocalGovernment, on_delete=models.CASCADE, related_name="fees"
+    )
+    application_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00
+    )
+    digitization_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00
+    )
+    regeneration_fee = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0.00
+    )
     currency = models.CharField(max_length=10, default="NGN")
-    last_updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    last_updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     updated_at = models.DateTimeField(auto_now=True)
+
 
 class LGDynamicField(models.Model):
     """
@@ -184,12 +220,21 @@ class LGDynamicField(models.Model):
         ("select", "Select"),
     )
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    local_government = models.ForeignKey(LocalGovernment, on_delete=models.CASCADE, related_name="dynamic_fields")
+    local_government = models.ForeignKey(
+        LocalGovernment,
+        on_delete=models.CASCADE,
+        related_name="dynamic_fields",
+    )
     field_label = models.CharField(max_length=150)
     field_name = models.CharField(max_length=150)  # developer-friendly name
     field_type = models.CharField(max_length=50, choices=FIELD_TYPES)
     is_required = models.BooleanField(default=True)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -221,14 +266,20 @@ class CertificateApplication(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    applicant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="applications")
+    applicant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="applications",
+    )
     nin = models.CharField(max_length=20)
     full_name = models.CharField(max_length=255)
     date_of_birth = models.DateField()
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     state = models.ForeignKey(State, on_delete=models.SET_NULL, null=True)
-    local_government = models.ForeignKey(LocalGovernment, on_delete=models.SET_NULL, null=True)
+    local_government = models.ForeignKey(
+        LocalGovernment, on_delete=models.SET_NULL, null=True
+    )
     village = models.CharField(max_length=150, blank=True, null=True)
     residential_address = models.TextField(blank=True, null=True)
     landmark = models.CharField(max_length=255, blank=True, null=True)
@@ -237,10 +288,20 @@ class CertificateApplication(models.Model):
     profile_photo = models.URLField(blank=True, null=True)
     nin_slip = models.URLField(blank=True, null=True)
 
-    application_status = models.CharField(max_length=50, choices=STATUS_CHOICES, default="pending")
-    payment_status = models.CharField(max_length=50, choices=PAYMENT_STATUS, default="unpaid")
+    application_status = models.CharField(
+        max_length=50, choices=STATUS_CHOICES, default="pending"
+    )
+    payment_status = models.CharField(
+        max_length=50, choices=PAYMENT_STATUS, default="unpaid"
+    )
     remarks = models.TextField(blank=True, null=True)
-    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="approved_applications")
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_applications",
+    )
     approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -263,10 +324,17 @@ class ApplicationFieldResponse(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    application = models.ForeignKey(CertificateApplication, on_delete=models.CASCADE, related_name="field_responses")
+    application = models.ForeignKey(
+        CertificateApplication,
+        on_delete=models.CASCADE,
+        related_name="field_responses",
+    )
     field = models.ForeignKey(LGDynamicField, on_delete=models.CASCADE)
-    field_value = models.TextField(blank=True, null=True)  # store path for files or the text value
+    field_value = models.TextField(
+        blank=True, null=True
+    )  # store path for files or the text value
     created_at = models.DateTimeField(auto_now_add=True)
+
 
 class Payment(models.Model):
     """
@@ -276,7 +344,7 @@ class Payment(models.Model):
     It captures transaction details such as amount, payment gateway used,
     transaction status, and timestamps for auditing purposes.
     """
-     
+
     STATUS = (
         ("pending", "Pending"),
         ("successful", "Successful"),
@@ -285,14 +353,25 @@ class Payment(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    application = models.ForeignKey(CertificateApplication, on_delete=models.CASCADE, related_name="payments")
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="payments")
+    application = models.ForeignKey(
+        CertificateApplication,
+        on_delete=models.CASCADE,
+        related_name="payments",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="payments",
+    )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_reference = models.CharField(max_length=100, unique=True)
     payment_gateway = models.CharField(max_length=50, blank=True, null=True)
-    payment_status = models.CharField(max_length=50, choices=STATUS, default="pending")
+    payment_status = models.CharField(
+        max_length=50, choices=STATUS, default="pending"
+    )
     payment_date = models.DateTimeField(default=timezone.now)
     created_at = models.DateTimeField(auto_now_add=True)
+
 
 class Certificate(models.Model):
     """
@@ -304,9 +383,15 @@ class Certificate(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    application = models.OneToOneField(CertificateApplication, on_delete=models.CASCADE, related_name="certificate")
+    application = models.OneToOneField(
+        CertificateApplication,
+        on_delete=models.CASCADE,
+        related_name="certificate",
+    )
     certificate_number = models.CharField(max_length=50, unique=True)
-    certificate_type = models.CharField(max_length=50, default="original")  # original, digitized, regenerated
+    certificate_type = models.CharField(
+        max_length=50, default="original"
+    )  # original, digitized, regenerated
     issue_date = models.DateField(default=timezone.now)
     expiry_date = models.DateField(blank=True, null=True)
     verification_code = models.CharField(max_length=100, unique=True)
@@ -321,10 +406,10 @@ class Certificate(models.Model):
         ]
 
 
-
 class DigitizationRequest(models.Model):
     """
-    Represents a request from an applicant to digitize a previously issued hardcopy certificate.
+    Represents a request from an applicant to digitize a previously
+    issued hardcopy certificate.
 
     Applicants upload a scanned version of their existing certificate (and optionally
     a profile photo and NIN slip) to generate a verified digital copy for a reduced fee.
@@ -344,23 +429,41 @@ class DigitizationRequest(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    applicant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="digitization_requests")
+    applicant = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="digitization_requests",
+    )
     nin = models.CharField(max_length=20)
     full_name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     state = models.ForeignKey(State, on_delete=models.SET_NULL, null=True)
-    local_government = models.ForeignKey(LocalGovernment, on_delete=models.SET_NULL, null=True)
+    local_government = models.ForeignKey(
+        LocalGovernment, on_delete=models.SET_NULL, null=True
+    )
     uploaded_certificate = models.URLField(blank=True, null=True)
-    certificate_reference_number = models.CharField(max_length=100, blank=True, null=True)
+    certificate_reference_number = models.CharField(
+        max_length=100, blank=True, null=True
+    )
 
     # NEW FIELDS for digitization requests
     profile_photo = models.URLField(blank=True, null=True)
     nin_slip = models.URLField(blank=True, null=True)
 
-    payment_status = models.CharField(max_length=50, choices=PAYMENT_STATUS, default="unpaid")
-    verification_status = models.CharField(max_length=50, choices=VERIFICATION_STATUS, default="pending")
-    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="digitization_reviewed")
+    payment_status = models.CharField(
+        max_length=50, choices=PAYMENT_STATUS, default="unpaid"
+    )
+    verification_status = models.CharField(
+        max_length=50, choices=VERIFICATION_STATUS, default="pending"
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="digitization_reviewed",
+    )
     reviewed_at = models.DateTimeField(null=True, blank=True)
     remarks = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -376,14 +479,23 @@ class DigitizationCertificate(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    digitization_request = models.OneToOneField(DigitizationRequest, on_delete=models.CASCADE, related_name="digitized_certificate")
+    digitization_request = models.OneToOneField(
+        DigitizationRequest,
+        on_delete=models.CASCADE,
+        related_name="digitized_certificate",
+    )
     certificate_number = models.CharField(max_length=50, unique=True)
     verification_code = models.CharField(max_length=100, unique=True)
     issue_date = models.DateField(default=timezone.now)
     expiry_date = models.DateField(blank=True, null=True)
     file_path = models.URLField(null=True, blank=True)
     certificate_type = models.CharField(max_length=50, default="digitized")
-    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
     approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -397,8 +509,12 @@ class DigitizationPayment(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    digitization_request = models.ForeignKey(DigitizationRequest, on_delete=models.CASCADE, related_name="payments")
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    digitization_request = models.ForeignKey(
+        DigitizationRequest, on_delete=models.CASCADE, related_name="payments"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE
+    )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_reference = models.CharField(max_length=100, unique=True)
     payment_gateway = models.CharField(max_length=50, blank=True, null=True)
@@ -431,10 +547,18 @@ class Transaction(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="transactions")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="transactions",
+    )
     transaction_title = models.CharField(max_length=150)
-    transaction_type = models.CharField(max_length=50, choices=TRANSACTION_TYPES)
-    related_id = models.UUIDField(null=True, blank=True)  # store related application or digitization_request uuid
+    transaction_type = models.CharField(
+        max_length=50, choices=TRANSACTION_TYPES
+    )
+    related_id = models.UUIDField(
+        null=True, blank=True
+    )  # store related application or digitization_request uuid
     reference_code = models.CharField(max_length=100, unique=True)
     payment_gateway = models.CharField(max_length=50, blank=True, null=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -456,8 +580,15 @@ class VerificationLog(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    certificate = models.ForeignKey(Certificate, on_delete=models.CASCADE, null=True, blank=True)
-    digitization_certificate = models.ForeignKey(DigitizationCertificate, on_delete=models.CASCADE, null=True, blank=True)
+    certificate = models.ForeignKey(
+        Certificate, on_delete=models.CASCADE, null=True, blank=True
+    )
+    digitization_certificate = models.ForeignKey(
+        DigitizationCertificate,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
     verifier_role = models.CharField(max_length=50, blank=True, null=True)
     verifier_info = models.CharField(max_length=255, blank=True, null=True)
     verification_status = models.CharField(max_length=50)
@@ -466,7 +597,12 @@ class VerificationLog(models.Model):
 
 class AuditLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name="audit_logs")
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="audit_logs",
+    )
     action_type = models.CharField(
         max_length=50,
         choices=[
