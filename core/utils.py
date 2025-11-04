@@ -115,7 +115,7 @@ cloudinary.config(
 )
 
 
-def upload_file_to_cloudinary(file_name):
+def upload_file_to_cloudinary(file_name, folder: str = "uploads"):
     """
     Uploads a file to Cloudinary and returns the
     secure URL of the uploaded file.
@@ -131,7 +131,7 @@ def upload_file_to_cloudinary(file_name):
        Exception: If there is an error during the upload process.
     """
     try:
-        response = cloudinary.uploader.upload(file_name)
+        response = cloudinary.uploader.upload(file_name, folder=folder)
         return response["secure_url"]
     except Exception as e:
         return f"Error while uploading file to Cloudinary: {e}"
@@ -185,4 +185,49 @@ def validate_nin_number(nin: str) -> bool:
     if len(nin) == 11 and nin.isdigit():
         return True
     return False
+
+
+def generate_random_id(
+    length: int = 10,
+    special_chars: bool = False,
+    chars: list[str] | None = None,
+    numeric: bool = True,
+    prefix: str | None = None,
+    use_separator: bool = False,
+    separator: str = "-",
+) -> str:
+    """
+    Generate a random string ID.
+
+    Args:
+        length (int): Length of string to be created.
+        special_chars (bool): Whether to include punctuation symbols.
+        chars (list[str] | None): Custom characters to use for generation.
+        numeric (bool): Whether to include digits.
+        prefix (str | None): Optional string prefix.
+        use_separator (bool): Whether to separate prefix
+        and random string with a symbol.
+        separator (str): The separator to use if `use_separator` is True.
+
+    Returns:
+        str: Randomly generated string.
+    """
+
+    if chars:
+        pool = "".join(chars)
+    else:
+        pool = string.ascii_letters
+        if numeric:
+            pool += string.digits
+        if special_chars:
+            pool += string.punctuation
+
+    generated_string = "".join(random.choices(pool, k=length))
+
+    if prefix:
+        if use_separator:
+            return f"{prefix}{separator}{generated_string}"
+        return f"{prefix}{generated_string}"
+
+    return generated_string
 

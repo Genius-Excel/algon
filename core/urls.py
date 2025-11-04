@@ -25,8 +25,13 @@ urlpatterns = [
     ),
     path("uploads", views.handle_uploads, name="handle file uploads"),
     path(
-        "upload-status/<task_id:str>",
+        "upload-status/<str:task_id>",
         views.upload_status,
         name="upload status",
+    ),
+    path(
+        "certificate/digitization",
+        views.certificate_digitization,
+        name="certificate digitization",
     ),
 ]

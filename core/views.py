@@ -1,4 +1,5 @@
 from http.client import HTTPResponse
+from django.db import transaction
 from django.http.request import HttpRequest
 from django.shortcuts import render
 from django.conf import settings
@@ -30,12 +31,16 @@ from core.tasks import async_cloudinary_upload
 from .models import (
     Certificate,
     CertificateApplication,
+    DigitizationPayment,
+    DigitizationRequest,
     LGDynamicField,
     LGFee,
     LocalGovernment,
     Role,
+    Transaction,
 )
 from .utils import (
+    generate_random_id,
     generate_username,
     create_audit_log,
     upload_file_to_cloudinary,
@@ -591,6 +596,13 @@ def create_certificate_application(request):
             {"error": "Approved application already exists"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    if DigitizationRequest.objects.filter(
+        applicant=user, verification_status="approved"
+    ).exists():
+        return Response(
+            {"error": "User already has an approved digitization request"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     serializer = CreateApplicationSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -807,7 +819,150 @@ def upload_status(request, task_id):
 @permission_classes([IsAuthenticated])
 def certificate_digitization(request):
     user = request.user
+    # confirm if the user does not have an existing digitization request
+    if DigitizationRequest.objects.filter(
+        applicant=user, verification_status="approved"
+    ).exists():
+        return Response(
+            {"error": "User already has an approved digitization request"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if CertificateApplication.objects.filter(
+        applicant=user, application_status="approved"
+    ).exists():
+        return Response(
+            {"error": "Approved application already exists"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     serializer = DigitizationRequestSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     serializer.save(applicant=user)
+    create_audit_log(
+        user=user, action_type="create", table_name="DigitizationRequest"
+    )
     return Response({"data": serializer.data}, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def initiate_payment(request):
+    """
+    Initiate a payment for different types of services in the system.
+
+    This endpoint supports payments for:
+        - Certificate Applications
+        - Digitization Requests
+        - (Extendable to other payment types)
+
+    The frontend must provide the following in the request body:
+        - payment_type (str): Type of payment
+        ("application", "digitization", etc.)
+        - model_id (str, UUID): ID of the target object for the payment
+        - amount (decimal): Amount to be paid
+        - currency (str, optional): Currency code, defaults to "NGN"
+        - payment_gateway (str, optional): Payment
+        gateway to use, defaults to "paystack"
+
+    Args:
+        request (Request): The HTTP request object containing
+        user data and payment info.
+
+    Returns:
+        Response:
+            201 Created - Payment successfully initiated
+                {
+                    "message": "Application payment initiated",
+                    "payment_id": "<UUID of Payment record>",
+                    "transaction_id": "<UUID of Transaction record>"
+                }
+            400 Bad Request - Missing or invalid fields
+                {
+                    "error": "<error message>"
+                }
+            404 Not Found - Target object does not exist
+                {
+                    "detail": "Not found."
+                }
+
+    Notes:
+        - Creates a Payment record for the specified type.
+        - Creates a generic Transaction record for audit/logging purposes.
+        - Extendable to support additional payment types with minimal changes.
+    """
+    user = request.user
+    data = request.data
+    role = getattr(user.role, "name", "")
+    if role != "applicant":
+        return Response(
+            {"error": "User is not an applicant"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    payment_type = data.get("payment_type")
+    model_id = data.get("related_id")
+    payment_gateway = data.get("payment_gateway", "paystack")
+    amount = data.get("amount", None)
+
+    model_object = None
+
+    if not payment_type or not model_id or not amount:
+        return Response(
+            {"error": "payment_type, related_id and amount are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if payment_type.lower() == "application":
+        model_object = get_object_or_404(CertificateApplication, id=model_id)
+        if model_object.application != user:
+            return Response(
+                {"error": "Payment must be initiated by the applicant"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        # create the transaction entry
+
+    elif payment_type.lower() == "digitization":
+        model_object = get_object_or_404(DigitizationRequest, id=model_id)
+        if model_object.application != user:
+            return Response(
+                {"error": "Payment must be initiated by the applicant"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        reference = generate_random_id(prefix="TRX", use_separator=True)
+
+    else:
+        return Response(
+            {"error": "Unsupported payment type"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        reference = generate_random_id(
+            prefix="TRX", use_separator=True, separator="-"
+        )
+        transaction_entry = Transaction.objects.create(
+            user=user,
+            reference=reference,
+            payment_type=payment_type,
+            amount=amount,
+            # currency=currency,
+        )
+        if payment_type.lower() == "digitization":
+            digitization_request = DigitizationRequest.objects.filter(
+                id=model_id
+            ).first()
+            if digitization_request:
+                payment_entry = DigitizationPayment.objects.create(
+                    amount=amount,
+                    payment_reference=reference,
+                    payment_gateway=payment_gateway,
+                    user=user,
+                )
+                # send to the relevant payment api
+            return Response(
+                {
+                    "message": f"{payment_type.capitalize()} payment initiated",
+                    "payment_id": str(payment_entry.id),
+                    "transaction_id": str(transaction_entry.id),
+                    "payment_reference": transaction_entry.reference,
+                },
+                status=status.HTTP_201_CREATED,
+            )
