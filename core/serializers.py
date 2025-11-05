@@ -166,7 +166,6 @@ class CreateApplicationSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
-        print(validated_data)
         return CertificateApplication.objects.create(**validated_data)
 
 
