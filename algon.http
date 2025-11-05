@@ -1,0 +1,130 @@
+### 
+
+@BASE_URL = http://localhost:8000
+@TOKEN = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzYyMzc4NDAyLCJpYXQiOjE3NjIyOTIwMDIsImp0aSI6IjQ1YzRmZWNmMDRkZDQ4NTdhMTdlZTg3MmMyZDFlZTdkIiwidXNlcl9pZCI6IjRmYzZkZWE3LTc1NTYtNDZmZS1hMjIyLTIzZWNmYzIwMzM5ZiJ9.JKvBWuuU_uqSbWHgLJinMnbYHCWL_58QAFHsMZa8AAQ
+
+
+### 
+
+# @name login applicant
+
+POST {{BASE_URL}}/auth/login HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+
+{
+  "email": "randomuser@gmail.com",
+  "password": "testpassword"
+}
+
+
+### 
+
+# @name Register User
+
+POST {{BASE_URL}}/register/applicant HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+
+{
+  "email": "randomuser@gmail.com",
+  "nin": "01234567899",
+  "password": "testpassword",
+  "phone_number": "+23481746625123"
+}
+
+
+### 
+
+# @name Verify certificate
+
+POST {{BASE_URL}}/certificate/verify HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{TOKEN}}
+
+{
+  "cert_id": "12039293020823"
+}
+
+
+### 
+
+# @name GET LOCAL GOVT FEES
+
+GET {{BASE_URL}}/application-fees/local-government?lga=ikeja HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{TOKEN}}
+
+
+### 
+
+# @name Create certificate application
+
+POST {{BASE_URL}}/certificates/applications HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{TOKEN}}
+
+{
+  "date_of_birth": "2025-05-19",
+  "email": "dev.scrribbles@gmail.com",
+  "full_name": "Oreoluwa Akinbo",
+  "landmark": "Regent's palace",
+  "letter_from_traditional_ruler": "https://res.cloudinary.com/dn9tjkuga/image/upload/v1762298129/uploads/p1knr3zeus7dwq3bkzpr.png",
+  "local_government": "Ikeja",
+  "nin": "10000000090",
+  "nin_slip": "https://res.cloudinary.com/dn9tjkuga/image/upload/v1762298129/uploads/p1knr3zeus7dwq3bkzpr.png",
+  "phone_number": "+234918332493",
+  "profile_photo": "https://res.cloudinary.com/dn9tjkuga/image/upload/v1762298129/uploads/p1knr3zeus7dwq3bkzpr.png",
+  "residential_address": "24, oba olagunju avenues",
+  "state": "Lagos",
+  "village": "Ero"
+}
+
+
+### 
+
+# @name Create Certificate digitization
+
+POST {{BASE_URL}}/certificate/digitization HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{TOKEN}}
+
+{
+  "full_name": "Oreoluwa",
+  "nin": "1029932392"
+}
+
+
+### 
+
+# @name file uploads
+
+POST {{BASE_URL}}/uploads HTTP/1.1
+Authorization: Bearer {{TOKEN}}
+Content-Type: multipart/form-data; boundary=BOUNDARY
+
+--BOUNDARY
+Content-Disposition: form-data; name="file"; filename="Gw2WgX2XYAAE9kv.png"
+Content-Type: image/png
+
+< /home/kinghorey/Pictures/Gw2WgX2XYAAE9kv.png
+--BOUNDARY
+Content-Disposition: form-data; name="file_type"
+
+nin_slip
+--BOUNDARY--
+
+file: @/home/kinghorey/Pictures/Gw2WgX2XYAAE9kv.png
+file_type: nin_slip
+
+
+### 
+
+# @name FILE UPLOAD STATUS
+
+GET {{BASE_URL}}/upload-status/c55682d7-65e5-43b2-9585-6005c959c1de HTTP/1.1
+Authorization: Bearer {{TOKEN}}

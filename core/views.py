@@ -994,3 +994,13 @@ def initiate_payment(request):
                     },
                     status=status.HTTP_201_CREATED,
                 )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def my_applications(request):
+
+    user = request.user
+    user_role = getattr(user.role, "role", "")
+    if user_role == "applicant":
+        
