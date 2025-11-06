@@ -1003,4 +1003,4 @@ def my_applications(request):
     user = request.user
     user_role = getattr(user.role, "role", "")
     if user_role == "applicant":
-        
+        pass
