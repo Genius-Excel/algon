@@ -31,6 +31,8 @@ from django.contrib.auth import (
 
 from core.tasks import cloudinary_upload_task
 from .models import (
+    AdminPermission,
+    AuditLog,
     Certificate,
     CertificateApplication,
     DigitizationPayment,
@@ -45,13 +47,16 @@ from .utils import (
     generate_random_id,
     generate_username,
     create_audit_log,
+    get_request_info,
     upload_file_to_cloudinary,
     validate_nin_number,
     generate_email_confirmation_token,
     send_email_with_html_template,
 )
 from .serializers import (
+    ApplicationSerializer,
     DigitizationRequestSerializer,
+    DigitizationSerializer,
     FileUploadSerializer,
     LGDynamicFieldSerializer,
     LGFeeSerializer,
@@ -996,11 +1001,119 @@ def initiate_payment(request):
                 )
 
 
-@api_view(["GET"])
+@api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def my_applications(request):
+    user = request.user
+    user_role = getattr(user.role, "name", "")
+
+    if request.method == "GET":
+        if user_role == "applicant":
+            certificates = CertificateApplication.objects.filter(
+                applicant=user
+            )
+        elif user_role == "lg_admin":
+            admin = AdminPermission.objects.filter(admin=user).first()
+            if not admin:
+                return Response({"error": "User not permitted"}, status=403)
+            certificates = CertificateApplication.objects.filter(
+                local_government=admin.local_government
+            )
+        else:
+            return Response({"error": "Invalid role"}, status=403)
+
+        serializer = ApplicationSerializer(certificates, many=True)
+        if serializer.data:
+            info = get_request_info(request)
+            description = ""
+
+            if user.role.name == "applicant":
+                description = (
+                    f"{user.get_full_name()} viewed their applied certificates"
+                )
+            elif user.role.name == "lg_admin":
+                admin = AdminPermission.objects.filter(admin=user).first()
+                description = (
+                    f"{user.email} from {admin.local_government} viewed all applications "
+                    f"in their local government"
+                )
+            else:
+                description = (
+                    f"{user.email} viewed certificates (unspecified role)"
+                )
+            AuditLog.objects.create(
+                table_name="CertificateApplication",
+                user=user,
+                action_type="view",
+                description=description,
+                ip_address=info.get("ip", None),
+                user_agent=info.get("user_agent", None),
+            )
+        return Response(serializer.data)
+
+    if request.method == "PATCH":
+        user = request.user
+        if user_role not in ["lg_admin", "super_admin"]:
+            return Response(
+                {"error": "User not permitted"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        certificate_id = request.data.get("certificate_id")
+        if not certificate_id:
+            return Response(
+                {"error": "Certificate ID not provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        certificate = get_object_or_404(
+            CertificateApplication, id=certificate_id
+        )
+        allowed_local_govt = AdminPermission.objects.filter(
+            local_government=certificate.local_government, admin=user
+        ).exists()
+        if not allowed_local_govt:
+            return Response(
+                "You are not allowed to approve/reject applications outside of your local government",
+                status=403,
+            )
+        serializer = ApplicationSerializer(
+            certificate,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=200)
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def my_digitizations(request):
+    """ """
 
     user = request.user
-    user_role = getattr(user.role, "role", "")
-    if user_role == "applicant":
+    user_role = getattr(user.role, "name", "")
+
+    if request.method == "GET":
+        if user_role == "applicant":
+            digitizations = DigitizationRequest.objects.filter(applicant=user)
+            if not digitizations:
+                return Response([], status=200)
+            serializer = DigitizationSerializer(digitizations, many=True)
+            return Response(serializer.data, status=200)
+        elif user_role == "lg_admin":
+            allowed_local_govt = AdminPermission.objects.filter(
+                admin=user, local_government=digitizations.local_government
+            )
+
+            digitizations = DigitizationRequest.objects.filter(
+                local_government=user.local_government
+            )
+            serializer = DigitizationSerializer(
+                local_government=user.local_government, many=True
+            )
+            return Response(serializer.data, status=200)
+
+    elif request.method == "PATCH":
         pass

@@ -231,3 +231,23 @@ def generate_random_id(
 
     return generated_string
 
+
+def get_request_info(request) -> dict[str, str | None]:
+    """
+    Retrieve information about incoming request
+
+    Args:
+        Request: HTTPRequest
+
+    Returns
+        Dict with the IP and user agent
+    """
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    ip = (
+        x_forwarded_for.split(",")[0].strip()
+        if x_forwarded_for
+        else request.META.get("REMOTE_ADDR")
+    )
+    user_agent = request.META.get("HTTP_USER_AGENT", "")
+
+    return {"ip": ip or None, "user_agent": user_agent or None}

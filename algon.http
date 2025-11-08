@@ -1,7 +1,22 @@
 ### 
 
+@ADMIN_TOKEN = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzYyNjYwMjA0LCJpYXQiOjE3NjI1NzM4MDQsImp0aSI6IjNjMWUyOGRjMDMzYzQ0MmI5YjVhZTFkZWY0MWI5ZGI1IiwidXNlcl9pZCI6IjliMmQ2ZGUxLTI3OWEtNGM2NC1iNWJmLTg0Zjk1MjRiY2JmMiJ9.2otd1YFb-IDiqTHRPl07szE7gXQcAPCPi5XFuJjde5E
 @BASE_URL = http://localhost:8000
-@TOKEN = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzYyMzc4NDAyLCJpYXQiOjE3NjIyOTIwMDIsImp0aSI6IjQ1YzRmZWNmMDRkZDQ4NTdhMTdlZTg3MmMyZDFlZTdkIiwidXNlcl9pZCI6IjRmYzZkZWE3LTc1NTYtNDZmZS1hMjIyLTIzZWNmYzIwMzM5ZiJ9.JKvBWuuU_uqSbWHgLJinMnbYHCWL_58QAFHsMZa8AAQ
+@TOKEN = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzYyNjU3ODU1LCJpYXQiOjE3NjI1NzE0NTUsImp0aSI6ImY1ZDdjZWQ4MjA4ZTQ1NDQ5ZjhjNGQ1NGFlYTlmOTc2IiwidXNlcl9pZCI6IjRmYzZkZWE3LTc1NTYtNDZmZS1hMjIyLTIzZWNmYzIwMzM5ZiJ9.af4uOecLGsT9uGfRfTNYd5d_vAUeEqtHm6iUWhQk46g
+
+
+### 
+
+# @name login lg_Admin
+
+POST {{BASE_URL}}/auth/login HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+
+{
+  "email": "oreoluwaakinbo.oa@gmail.com",
+  "password": "testpassword"
+}
 
 
 ### 
@@ -73,7 +88,7 @@ Authorization: Bearer {{TOKEN}}
   "full_name": "Oreoluwa Akinbo",
   "landmark": "Regent's palace",
   "letter_from_traditional_ruler": "https://res.cloudinary.com/dn9tjkuga/image/upload/v1762298129/uploads/p1knr3zeus7dwq3bkzpr.png",
-  "local_government": "Ikeja",
+  "local_government": "Agege",
   "nin": "10000000090",
   "nin_slip": "https://res.cloudinary.com/dn9tjkuga/image/upload/v1762298129/uploads/p1knr3zeus7dwq3bkzpr.png",
   "phone_number": "+234918332493",
@@ -128,3 +143,24 @@ file_type: nin_slip
 
 GET {{BASE_URL}}/upload-status/c55682d7-65e5-43b2-9585-6005c959c1de HTTP/1.1
 Authorization: Bearer {{TOKEN}}
+
+
+### 
+
+# @name MY APPLICATIONS
+
+GET {{BASE_URL}}/certificates/my-applications HTTP/1.1
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+
+### 
+
+# @name Approve applications
+
+PATCH {{BASE_URL}}/certificates/my-applications HTTP/1.1
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+{
+  "action": "rejected",
+  "certificate_id": "1d88cbdf-036c-4c39-a96f-661988d153c2"
+}

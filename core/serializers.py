@@ -1,6 +1,8 @@
 from rest_framework import serializers
+import datetime
 
 from core.models import (
+    AdminPermission,
     CertificateApplication,
     DigitizationRequest,
     LGDynamicField,
@@ -170,14 +172,12 @@ class CreateApplicationSerializer(serializers.Serializer):
 
 
 class LGDynamicFieldSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = LGDynamicField
         fields = "__all__"
 
 
 class LGFeeSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = LGFee
         fields = "__all__"
@@ -209,7 +209,6 @@ class LGFeeSerializer(serializers.ModelSerializer):
 
 
 class AdditionalRequirementSerializer(serializers.Serializer):
-
     class Meta:
         model = LGDynamicField
 
@@ -241,3 +240,89 @@ class DigitizationRequestSerializer(serializers.ModelSerializer):
 class FileUploadSerializer(serializers.Serializer):
     file = serializers.FileField(required=True)
     file_type = serializers.CharField(max_length=30)
+
+
+class ApplicationSerializer(serializers.ModelSerializer):
+    action = serializers.ChoiceField(
+        choices=["approved", "rejected"], write_only=True
+    )
+    certificate_id = serializers.PrimaryKeyRelatedField(
+        write_only=True,
+        queryset=CertificateApplication.objects.all(),
+    )
+
+    class Meta:
+        fields = "__all__"
+        model = CertificateApplication
+
+    def validate(self, attrs):
+        request_context = self.context.get("request")
+        user = request_context.user if request_context else None
+
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError(
+                "User not provided or not authenticated"
+            )
+
+        permissions = AdminPermission.objects.filter(admin=user).first()
+        if not permissions or not permissions.can_approve:
+            raise serializers.ValidationError(
+                "User not authorized to approve/reject applications"
+            )
+        certificate = attrs.get("certificate_id")
+        if certificate.local_government != permissions.local_government:
+            raise serializers.ValidationError(
+                "User not authorized to approve/reject applications in this local_government"
+            )
+        if certificate.payment_status != "paid":
+            raise serializers.ValidationError(
+                "Application has not been paid for"
+            )
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        action = validated_data.pop("action", None)
+        if action == "approved":
+            if instance.application_status == action:
+                raise serializers.ValidationError(
+                    "Application already approved"
+                )
+            instance.application_status = action
+            instance.approved_at = datetime.datetime.now()
+        elif action == "rejected":
+            if instance.application_status == action:
+                raise serializers.ValidationError(
+                    f"Application already {action}"
+                )
+            instance.application_status = action
+        request = self.context.get("request")
+        if not request:
+            return
+        if action == "approved":
+            instance.approved_by = request.user
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if instance.approved_by:
+            representation["approved_by"] = {
+                "id": instance.approved_by.id,
+                "email": instance.approved_by.email,
+            }
+        return representation
+
+
+class DigitizationSerializer(serializers.ModelSerializer):
+    request_id = serializers.PrimaryKeyRelatedField(
+        queryset=DigitizationRequest.objects.all(), write_only=True
+    )
+    action = serializers.ChoiceField(
+        choices=["pending", "under_review", "approved", "rejected"],
+        write_only=True,
+    )
+
+    class Meta:
+        fields = "__all__"
+        model = DigitizationRequest

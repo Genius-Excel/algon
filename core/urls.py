@@ -34,4 +34,10 @@ urlpatterns = [
         views.certificate_digitization,
         name="certificate digitization",
     ),
+    path(
+        "certificates/my-applications",
+        views.my_applications,
+        name="My applications",
+    ),
+    path("digitization", views.my_digitizations, name="my digitizations"),
 ]
