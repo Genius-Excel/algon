@@ -1,9 +1,5 @@
-from http.client import HTTPResponse
 import tempfile
-from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.db import transaction
-from django.http.request import HttpRequest
-from django.shortcuts import render
 from django.conf import settings
 from django.http import JsonResponse
 from rest_framework import status
@@ -1001,77 +997,97 @@ def initiate_payment(request):
                 )
 
 
-@api_view(["GET", "PATCH"])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def my_applications(request):
     user = request.user
     user_role = getattr(user.role, "name", "")
 
-    if request.method == "GET":
-        if user_role == "applicant":
-            certificates = CertificateApplication.objects.filter(
-                applicant=user
+    if user_role == "applicant":
+        certificates = CertificateApplication.objects.filter(applicant=user)
+    elif user_role == "lg_admin":
+        admin = AdminPermission.objects.filter(admin=user).first()
+        if not admin:
+            return Response({"error": "User not permitted"}, status=403)
+        certificates = CertificateApplication.objects.filter(
+            local_government=admin.local_government
+        )
+    else:
+        return Response({"error": "Invalid role"}, status=403)
+
+    serializer = ApplicationSerializer(certificates, many=True)
+    if serializer.data:
+        info = get_request_info(request)
+        description = ""
+
+        if user.role.name == "applicant":
+            description = (
+                f"{user.get_full_name()} viewed their applied certificates"
             )
-        elif user_role == "lg_admin":
+        elif user.role.name == "lg_admin":
             admin = AdminPermission.objects.filter(admin=user).first()
-            if not admin:
-                return Response({"error": "User not permitted"}, status=403)
-            certificates = CertificateApplication.objects.filter(
-                local_government=admin.local_government
+            description = (
+                f"{user.email} from {admin.local_government} viewed all applications "
+                f"in their local government"
             )
         else:
-            return Response({"error": "Invalid role"}, status=403)
-
-        serializer = ApplicationSerializer(certificates, many=True)
-        if serializer.data:
-            info = get_request_info(request)
-            description = ""
-
-            if user.role.name == "applicant":
-                description = (
-                    f"{user.get_full_name()} viewed their applied certificates"
-                )
-            elif user.role.name == "lg_admin":
-                admin = AdminPermission.objects.filter(admin=user).first()
-                description = (
-                    f"{user.email} from {admin.local_government} viewed all applications "
-                    f"in their local government"
-                )
-            else:
-                description = (
-                    f"{user.email} viewed certificates (unspecified role)"
-                )
-            AuditLog.objects.create(
-                table_name="CertificateApplication",
-                user=user,
-                action_type="view",
-                description=description,
-                ip_address=info.get("ip", None),
-                user_agent=info.get("user_agent", None),
+            description = (
+                f"{user.email} viewed certificates (unspecified role)"
             )
-        return Response(serializer.data)
+        AuditLog.objects.create(
+            table_name="CertificateApplication",
+            user=user,
+            action_type="view",
+            description=description,
+            ip_address=info.get("ip", None),
+            user_agent=info.get("user_agent", None),
+        )
+    return Response(serializer.data)
+
+
+@api_view(["PATCH", "GET"])
+@permission_classes([IsAuthenticated])
+def update_applications(request, id):
+    """
+    Retrieve or update a CertificateApplication instance.
+
+    GET:
+        - Returns certificate details if the requesting user has access.
+        - Applicants can view their own certificates.
+        - LG admins can view certificates in their local government.
+        - Logs all access attempts in AuditLog.
+
+    PATCH:
+        - Allows LG admins and super admins to approve or reject a certificate.
+        - Checks that the certificate belongs to the admin's assigned local government.
+        - Only users with the `can_approve` permission can perform this action.
+
+    Path Parameters:
+        - id: UUID of the CertificateApplication to retrieve or update.
+
+    Responses:
+        200 OK: Successful retrieval or update.
+        403 Forbidden: User lacks permissions.
+        404 Not Found: Certificate or permissions not found.
+        405 Method Not Allowed: Any other HTTP method.
+    """
+    user = request.user
+    user_role = getattr(user.role, "name", "")
+    roles = ["lg_admin", "super_admin"]
+    info = get_request_info(request)
 
     if request.method == "PATCH":
-        user = request.user
-        if user_role not in ["lg_admin", "super_admin"]:
+        certificate = get_object_or_404(CertificateApplication, id=id)
+        if user_role not in roles:
             return Response(
                 {"error": "User not permitted"},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        certificate_id = request.data.get("certificate_id")
-        if not certificate_id:
-            return Response(
-                {"error": "Certificate ID not provided"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
-        certificate = get_object_or_404(
-            CertificateApplication, id=certificate_id
-        )
-        allowed_local_govt = AdminPermission.objects.filter(
+        admin_perm = AdminPermission.objects.filter(
             local_government=certificate.local_government, admin=user
         ).exists()
-        if not allowed_local_govt:
+        if not admin_perm:
             return Response(
                 "You are not allowed to approve/reject applications outside of your local government",
                 status=403,
@@ -1085,6 +1101,63 @@ def my_applications(request):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=200)
+
+    if request.method == "GET":
+        application = get_object_or_404(CertificateApplication, id=id)
+        action_type = "view"
+        if user_role == "applicant" and application.applicant != user:
+            AuditLog.objects.create(
+                description=f"{user.email} tried to access ceritificate {application.id}",
+                table_name="CertificateApplication",
+                ip_address=info.get("ip"),
+                action_type=action_type,
+                user_agent=info.get("user_agent"),
+            )
+            return Response(
+                {
+                    "error": "You are not allowed to access other applicants' certificates."
+                },
+                status=403,
+            )
+        elif user_role == "lg_admin":
+            admin_perm = AdminPermission.objects.filter(admin=user).first()
+            if not admin_perm:
+                AuditLog.objects.create(
+                    description=f"{user.email} tried to access ceritificate {application.id}",
+                    table_name="CertificateApplication",
+                    ip_address=info.get("ip"),
+                    user_agent=info.get("user_agent"),
+                    action_type=action_type,
+                )
+                return Response(
+                    {"error": "Admin permissions not found"}, status=404
+                )
+            if application.local_government != admin_perm.local_government:
+                AuditLog.objects.create(
+                    description=f"{user.email} tried to access ceritificate {application.id}",
+                    table_name="CertificateApplication",
+                    ip_address=info.get("ip"),
+                    user_agent=info.get("user_agent"),
+                    action_type=action_type,
+                )
+                return Response(
+                    {
+                        "error": "You are not permitted to view certificates outside your local government."
+                    },
+                    status=403,
+                )
+        serializer = ApplicationSerializer(application)
+        AuditLog.objects.create(
+            description=f"{user.email} viewed ceritificate {application.id}",
+            table_name="CertificateApplication",
+            action_type=action_type,
+            ip_address=info.get("ip"),
+            user_agent=info.get("user_agent"),
+        )
+        return Response(serializer.data, status=200)
+
+    else:
+        return Response({"error": "Method not allowed"}, status=405)
 
 
 @api_view(["GET", "PATCH"])

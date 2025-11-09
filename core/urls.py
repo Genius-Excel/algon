@@ -39,5 +39,10 @@ urlpatterns = [
         views.my_applications,
         name="My applications",
     ),
+    path(
+        "certificates/<str:id>",
+        views.update_applications,
+        name="Update application status",
+    ),
     path("digitization", views.my_digitizations, name="my digitizations"),
 ]

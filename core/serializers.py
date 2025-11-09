@@ -246,10 +246,6 @@ class ApplicationSerializer(serializers.ModelSerializer):
     action = serializers.ChoiceField(
         choices=["approved", "rejected"], write_only=True
     )
-    certificate_id = serializers.PrimaryKeyRelatedField(
-        write_only=True,
-        queryset=CertificateApplication.objects.all(),
-    )
 
     class Meta:
         fields = "__all__"
