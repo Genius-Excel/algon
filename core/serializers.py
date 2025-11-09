@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 import datetime
 
@@ -284,8 +285,12 @@ class ApplicationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Application already approved"
                 )
+            if action == "approved" and instance.payment_status != "paid":
+                raise serializers.ValidationError(
+                    "Certificate Application request has not been paid for"
+                )
             instance.application_status = action
-            instance.approved_at = datetime.datetime.now()
+            instance.approved_at = timezone.now()
         elif action == "rejected":
             if instance.application_status == action:
                 raise serializers.ValidationError(
@@ -311,9 +316,6 @@ class ApplicationSerializer(serializers.ModelSerializer):
 
 
 class DigitizationSerializer(serializers.ModelSerializer):
-    request_id = serializers.PrimaryKeyRelatedField(
-        queryset=DigitizationRequest.objects.all(), write_only=True
-    )
     action = serializers.ChoiceField(
         choices=["pending", "under_review", "approved", "rejected"],
         write_only=True,
@@ -322,3 +324,64 @@ class DigitizationSerializer(serializers.ModelSerializer):
     class Meta:
         fields = "__all__"
         model = DigitizationRequest
+
+    def validate(self, attrs):
+        request_context = self.context.get("request")
+        user = request_context.user if request_context else None
+
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError(
+                "User not provided or not authenticated"
+            )
+
+        digitization = self.context.get("digitization")
+
+        permissions = AdminPermission.objects.filter(
+            admin=user, local_government=digitization.local_government
+        ).first()
+
+        if not permissions or not permissions.can_approve:
+            raise serializers.ValidationError(
+                "User not authorized to approve/reject digitization requests"
+            )
+        if digitization.local_government != permissions.local_government:
+            raise serializers.ValidationError(
+                "User not authorized to approve/reject digitization requests in this local_government"
+            )
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        action = validated_data.pop("action", None)
+        request = self.context.get("request")
+        if not request:
+            return
+        if action:
+            if instance.verification_status == action:
+                raise serializers.ValidationError(
+                    f"Digitization request already {action}"
+                )
+            if action == "approved" and instance.payment_status != "paid":
+                raise serializers.ValidationError(
+                    "Digitization request has not been paid for"
+                )
+            instance.verification_status = action
+            if action == "approved":
+                instance.approved_by = request.user
+                instance.approved_at = timezone.now()
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if instance.local_government:
+            representation["local_government"] = {
+                "id": instance.local_government.id,
+                "name": instance.local_government.name,
+            }
+        if instance.state:
+            representation["state"] = {
+                "id": instance.local_government.state.id or "",
+                "name": instance.local_government.state.name or "",
+            }
+        return representation

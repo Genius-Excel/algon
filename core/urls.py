@@ -45,4 +45,14 @@ urlpatterns = [
         name="Update application status",
     ),
     path("digitization", views.my_digitizations, name="my digitizations"),
+    path(
+        "digitization/overview",
+        views.lg_digitization_overview,
+        name="lg digitization overview",
+    ),
+    path(
+        "digitization/<str:id>",
+        views.update_digitization,
+        name="my digitizations",
+    ),
 ]

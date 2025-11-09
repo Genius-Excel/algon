@@ -6,17 +6,14 @@ from jinja2 import Environment, FileSystemLoader
 from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
 from datetime import timedelta
-from decouple import config
 import cloudinary
 import cloudinary.uploader
-import cloudinary.api
-from rest_framework import serializers
-import base64
-import uuid
-from django.core.files.base import ContentFile
 from django.conf import settings
 from core.models import AuditLog
 from django.utils import timezone
+
+from django.core.exceptions import PermissionDenied
+from core.permissions import ROLE_PERMISSIONS  # adjust path as needed
 
 
 def generate_username(length=10):
@@ -251,3 +248,42 @@ def get_request_info(request) -> dict[str, str | None]:
     user_agent = request.META.get("HTTP_USER_AGENT", "")
 
     return {"ip": ip or None, "user_agent": user_agent or None}
+
+
+# utils/permissions.py
+
+
+def user_has_permission(user, permission_code, raise_exception=False):
+    """
+    Checks if a user has the given permission_code.
+    e.g. "digitization.view_own"
+    If raise_exception=True, raises PermissionDenied instead of returning False.
+    """
+    role = getattr(user.role, "name", None)
+    if not role:
+        if raise_exception:
+            raise PermissionDenied("User role not defined")
+        return False
+
+    role_perms = ROLE_PERMISSIONS.get(role, [])
+
+    # Handle local government admin fine-grained control
+    if role == "lg_admin":
+        admin_perm = user.admin_permissions.first()
+        if not admin_perm:
+            if raise_exception:
+                raise PermissionDenied("No admin permissions assigned")
+            return False
+
+        if (
+            permission_code == "digitization.approve_request"
+            and not admin_perm.can_approve
+        ):
+            if raise_exception:
+                raise PermissionDenied("Approval not allowed for this admin")
+            return False
+
+    has_perm = permission_code in role_perms
+    if not has_perm and raise_exception:
+        raise PermissionDenied(f"Missing permission: {permission_code}")
+    return has_perm

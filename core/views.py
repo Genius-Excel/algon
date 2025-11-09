@@ -1,6 +1,7 @@
 import tempfile
 from django.db import transaction
 from django.conf import settings
+from django.db.models import Count
 from django.http import JsonResponse
 from rest_framework import status
 from rest_framework.response import Response
@@ -9,6 +10,7 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
+from rest_framework.utils.serializer_helpers import ReturnList, ReturnDict
 from celery.result import AsyncResult
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
@@ -18,12 +20,20 @@ from django.contrib.auth.password_validation import (
     validate_password,
     ValidationError as PasswordValidationError,
 )
+from django.utils.timezone import localtime
 from django.contrib.auth import (
     password_validation,
     authenticate,
     login,
     logout,
 )
+from django.db.models.functions import (
+    TruncMonth,
+    TruncQuarter,
+    TruncYear,
+    TruncWeek,
+)
+from django.utils.timezone import now
 
 from core.tasks import cloudinary_upload_task
 from .models import (
@@ -1006,11 +1016,13 @@ def my_applications(request):
     if user_role == "applicant":
         certificates = CertificateApplication.objects.filter(applicant=user)
     elif user_role == "lg_admin":
-        admin = AdminPermission.objects.filter(admin=user).first()
-        if not admin:
+        admin_perm = AdminPermission.objects.filter(admin=user)
+        if not admin_perm:
             return Response({"error": "User not permitted"}, status=403)
         certificates = CertificateApplication.objects.filter(
-            local_government=admin.local_government
+            local_government__in=admin_perm.values_list(
+                "local_government", flat=True
+            )
         )
     else:
         return Response({"error": "Invalid role"}, status=403)
@@ -1112,6 +1124,7 @@ def update_applications(request, id):
                 ip_address=info.get("ip"),
                 action_type=action_type,
                 user_agent=info.get("user_agent"),
+                user=user,
             )
             return Response(
                 {
@@ -1128,6 +1141,7 @@ def update_applications(request, id):
                     ip_address=info.get("ip"),
                     user_agent=info.get("user_agent"),
                     action_type=action_type,
+                    user=user,
                 )
                 return Response(
                     {"error": "Admin permissions not found"}, status=404
@@ -1138,6 +1152,7 @@ def update_applications(request, id):
                     table_name="CertificateApplication",
                     ip_address=info.get("ip"),
                     user_agent=info.get("user_agent"),
+                    user=user,
                     action_type=action_type,
                 )
                 return Response(
@@ -1153,6 +1168,7 @@ def update_applications(request, id):
             action_type=action_type,
             ip_address=info.get("ip"),
             user_agent=info.get("user_agent"),
+            user=user,
         )
         return Response(serializer.data, status=200)
 
@@ -1160,7 +1176,7 @@ def update_applications(request, id):
         return Response({"error": "Method not allowed"}, status=405)
 
 
-@api_view(["GET", "PATCH"])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def my_digitizations(request):
     """ """
@@ -1170,23 +1186,216 @@ def my_digitizations(request):
 
     if request.method == "GET":
         if user_role == "applicant":
-            digitizations = DigitizationRequest.objects.filter(applicant=user)
+            digitizations = DigitizationRequest.objects.filter(
+                applicant=user
+            ).all()
             if not digitizations:
                 return Response([], status=200)
             serializer = DigitizationSerializer(digitizations, many=True)
             return Response(serializer.data, status=200)
         elif user_role == "lg_admin":
-            allowed_local_govt = AdminPermission.objects.filter(
-                admin=user, local_government=digitizations.local_government
-            )
-
+            admin_perm = AdminPermission.objects.filter(admin=user)
+            if not admin_perm:
+                return Response({"error": "User not permitted"}, status=403)
             digitizations = DigitizationRequest.objects.filter(
-                local_government=user.local_government
+                local_government__in=admin_perm.values_list(
+                    "local_government", flat=True
+                )
             )
-            serializer = DigitizationSerializer(
-                local_government=user.local_government, many=True
+            serializer = DigitizationSerializer(digitizations, many=True)
+            return Response(serializer.data, status=200)
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def update_digitization(request, id):
+    """
+    Retrieve or update a DigitizationRequest instance.
+
+    GET:
+        - Returns digitization request details if the requesting user has access.
+        - Applicants can view their own requests.
+        - LG admins can view requests in their local government.
+        - Logs all access attempts in AuditLog.
+    """
+    user = request.user
+    if request.method == "GET":
+        digitization = get_object_or_404(DigitizationRequest, id=id)
+        action_type = "view"
+        info = get_request_info(request)
+        if user.role.name == "applicant":
+            if digitization.applicant != user:
+                AuditLog.objects.create(
+                    description=f"{user.email} tried to access digitization request {digitization.id}",
+                    table_name="DigitizationRequest",
+                    ip_address=info.get("ip"),
+                    action_type=action_type,
+                    user=user,
+                    user_agent=info.get("user_agent"),
+                )
+                return Response(
+                    {
+                        "error": "You are not allowed to access other applicants' digitization requests."
+                    },
+                    status=403,
+                )
+            serialier = DigitizationSerializer(digitization)
+            AuditLog.objects.create(
+                description=f"{user.email} viewed digitization request {digitization.id}",
+                table_name="DigitizationRequest",
+                action_type=action_type,
+                ip_address=info.get("ip"),
+                user=user,
+                user_agent=info.get("user_agent"),
+            )
+            return Response(serialier.data, status=200)
+
+        elif user.role.name == "lg_admin":
+            admin_perm = AdminPermission.objects.filter(
+                admin=user
+            ).values_list("local_government", flat=True)
+            if not admin_perm:
+                AuditLog.objects.create(
+                    description=f"{user.email} tried to access digitization request {digitization.id}",
+                    table_name="DigitizationRequest",
+                    ip_address=info.get("ip"),
+                    user_agent=info.get("user_agent"),
+                    action_type=action_type,
+                    user=user,
+                )
+                return Response(
+                    {"error": "Admin permissions not found"}, status=404
+                )
+            if digitization.local_government not in admin_perm:
+                AuditLog.objects.create(
+                    description=f"{user.email} tried to access digitization request {digitization.id}",
+                    table_name="DigitizationRequest",
+                    ip_address=info.get("ip"),
+                    user_agent=info.get("user_agent"),
+                    action_type=action_type,
+                    user=user,
+                )
+                return Response(
+                    {
+                        "error": "You are not permitted to view digitization requests outside your local government."
+                    },
+                    status=403,
+                )
+            serializer = DigitizationSerializer(digitization)
+            AuditLog.objects.create(
+                description=f"{user.email} viewed digitization request {digitization.id}",
+                table_name="DigitizationRequest",
+                action_type=action_type,
+                ip_address=info.get("ip"),
+                user_agent=info.get("user_agent"),
+                user=user,
             )
             return Response(serializer.data, status=200)
 
-    elif request.method == "PATCH":
-        pass
+    if request.method == "PATCH":
+        info = get_request_info(request)
+        digitization = get_object_or_404(DigitizationRequest, id=id)
+        if user.role.name != "lg_admin":
+            return Response(
+                {"error": "User not permitted"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        admin_perm = AdminPermission.objects.filter(
+            local_government=digitization.local_government, admin=user
+        ).exists()
+        if not admin_perm:
+            return Response(
+                "You are not allowed to approve/reject digitization requests outside of your local government",
+                status=403,
+            )
+
+        AuditLog.objects.create(
+            description=f"{user.email} attempted action '{request.data.get('action', 'N/A')}' on digitization request {getattr(digitization, 'id', 'N/A')}",
+            table_name="DigitizationRequest",
+            action_type="update",
+            ip_address=info.get("ip"),
+            user_agent=info.get("user_agent"),
+            user=user,
+        )
+        serializer = DigitizationSerializer(
+            digitization,
+            data=request.data,
+            partial=True,
+            context={
+                "request": request,
+                "digitization": digitization,
+            },
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data, status=200)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def lg_digitization_overview(request):
+    """
+    Provide an overview of digitization requests for the authenticated LG admin.
+    Args:
+        request (Request): The HTTP request object containing user data.
+    Returns:
+        Response: A Response object containing counts of digitization requests
+        by status and overall total.
+
+    """
+
+    user = request.user
+    user_role = getattr(user.role, "name", "")
+    current_month = now().month
+    current_year = now().year
+
+    if user_role != "lg_admin":
+        return Response(
+            {"error": "User not permitted"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    admin_perm = AdminPermission.objects.filter(admin=user)
+    if not admin_perm:
+        return Response({"error": "User not permitted"}, status=403)
+
+    digitizations = DigitizationRequest.objects.filter(
+        local_government__in=admin_perm.values_list(
+            "local_government", flat=True
+        )
+    )
+
+    monthly_counts = (
+        digitizations.annotate(month=TruncMonth("created_at"))
+        .values("month")
+        .annotate(count=Count("id"))
+        .order_by("month")
+    ).filter(
+        created_at__year=current_year,
+        created_at__month=current_month,
+        verification_status="approved",
+    )
+
+    total_requests = digitizations.count()
+    pending_requests = digitizations.filter(
+        verification_status="pending"
+    ).count()
+
+    rejected_requests = digitizations.filter(
+        verification_status="rejected"
+    ).count()
+
+    # revenue_generated = DigitizationPayment.objects.filter(local
+
+    data = {
+        "total_requests": total_requests,
+        "approved_requests_this_month": monthly_counts,
+        "pending_requests": pending_requests,
+        "rejected_requests": rejected_requests,
+        "revenue_generated": 0,
+    }
+
+    return Response(data, status=status.HTTP_200_OK)
