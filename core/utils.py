@@ -1,5 +1,6 @@
 import random
 import string
+import tempfile
 import mailtrap as mt
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
@@ -13,6 +14,8 @@ from core.models import AuditLog
 from django.utils import timezone
 
 from django.core.exceptions import PermissionDenied
+
+# from core.serializers import FileUploadSerializer
 
 
 def generate_username(length=10):
@@ -127,10 +130,13 @@ def upload_file_to_cloudinary(file_name, folder: str = "uploads"):
        Exception: If there is an error during the upload process.
     """
     try:
-        response = cloudinary.uploader.upload(file_name, folder=folder)
-        return response["secure_url"]
+        response = cloudinary.uploader.upload(file_name)
+        secure_url = response.get("secure_url")
+        if not secure_url:
+            raise Exception("No secure_url returned from Cloudinary")
+        return secure_url
     except Exception as e:
-        return f"Error while uploading file to Cloudinary: {e}"
+        raise Exception(f"Cloudinary upload failed: {str(e)}")
 
 
 def create_audit_log(
@@ -252,44 +258,33 @@ def get_request_info(request) -> dict[str, str | None]:
 # utils/permissions.py
 
 
-def user_has_permission(user, permission_code, raise_exception=False):
-    """
-    Checks if a user has the given permission_code.
-    e.g. "digitization.view_own"
-    If raise_exception=True, raises PermissionDenied instead of returning False.
-    """
-    role = getattr(user.role, "name", None)
-    if not role:
-        if raise_exception:
-            raise PermissionDenied("User role not defined")
-        return False
-
-    role_perms = ROLE_PERMISSIONS.get(role, [])
-
-    # Handle local government admin fine-grained control
-    if role == "lg_admin":
-        admin_perm = user.admin_permissions.first()
-        if not admin_perm:
-            if raise_exception:
-                raise PermissionDenied("No admin permissions assigned")
-            return False
-
-        if (
-            permission_code == "digitization.approve_request"
-            and not admin_perm.can_approve
-        ):
-            if raise_exception:
-                raise PermissionDenied("Approval not allowed for this admin")
-            return False
-
-    has_perm = permission_code in role_perms
-    if not has_perm and raise_exception:
-        raise PermissionDenied(f"Missing permission: {permission_code}")
-    return has_perm
-
-
 def get_user_role(user):
     """
     Returns the role name of the user.
     """
     return getattr(user.role, "name", None)
+
+
+# def handle_uploads(file, file_type, application_id=None):
+#     """
+#     Handles file uploads asynchronously via Celery.
+#
+#     Expects multipart/form-data with:
+#         - file: the uploaded file
+#         - file_type: the purpose (e.g., 'nin_slip', 'profile_photo')
+#
+#     Returns:
+#         {
+#             "task_id": "<celery_task_id>"
+#         }
+#     """
+#     if not file or not file_type:
+#         raise PermissionDenied("File and file_type are required.")
+#     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+#         for chunk in file.chunks():
+#             tmp_file.write(chunk)
+#         tmp_file_path = tmp_file.name
+#     task = cloudinary_upload_task.delay(
+#         tmp_file_path, file_type, application_id
+#     )
+#     return {"task_id": task.id}

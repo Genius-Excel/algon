@@ -1,7 +1,6 @@
-import tempfile
 from django.db import transaction
 from django.conf import settings
-from django.db.models import Count, Sum
+from django.db.models import Sum
 from django.http import JsonResponse
 from rest_framework import status
 from rest_framework.response import Response
@@ -21,11 +20,7 @@ from django.contrib.auth import (
     login,
     logout,
 )
-from django.db.models.functions import (
-    TruncMonth,
-)
 from django.utils.timezone import now, timedelta
-
 from core.permissions import (
     CanViewAndApproveRequests,
     IsApplicantUser,
@@ -33,7 +28,6 @@ from core.permissions import (
 )
 from core.tasks import cloudinary_upload_task
 from .models import (
-    AdminPermission,
     AuditLog,
     Certificate,
     CertificateApplication,
@@ -54,10 +48,11 @@ from .utils import (
     send_email_with_html_template,
 )
 from .serializers import (
+    ApplicationFieldResponseSerializer,
     ApplicationSerializer,
+    CreateApplicationStep2Serializer,
     DigitizationRequestSerializer,
     DigitizationSerializer,
-    FileUploadSerializer,
     LGDynamicFieldSerializer,
     LGFeeSerializer,
     UserRegistrationSerializer,
@@ -443,9 +438,7 @@ def password_reset_email(request):
     """
     Handles the password reset process.
     This function processes POST requests with an email address and sends a
-    password reset link to the user's email address. The link contains a token
-    that is valid for a limited time, after which the user can reset their password.
-    Args:
+    password reset link to the user's email address. The link contains a token that is valid for a limited time, after which the user can reset their password. Args:
         request (HttpRequest): The HTTP request object containing the email address.
     Returns:
         Response: A Response object with a success message and HTTP 200 status if
@@ -578,66 +571,145 @@ def change_password(request):
 
 @api_view(["POST", "PATCH"])
 @permission_classes([IsAuthenticated, IsApplicantUser])
-def create_certificate_application(request, step_number, application_id=None):
+def create_certificate_application(
+    request, step_number=None, application_id=None
+):
     """
-    Create the local goverment Certificate for the applicant
+    Multi-step Certificate Application for applicants.
 
-    Args: request (HttpRequest): The HTTP request object containing the request body
-
-    Returns: HTTPResponse 201 when application has been created
-
+    POST: Create a new application (step 1 or subsequent steps)
+    PATCH: Update existing application for a given step.
     """
-    # confirm if user is an applicant, does not have an
-    # existing approved certificate application request
     user = request.user
-    if request.method == "POST" and not step_number and not application_id:
-        if CertificateApplication.objects.filter(
-            applicant=user, application_status="approved"
-        ).exists():
-            return Response(
-                {"error": "Approved application already exists"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if DigitizationRequest.objects.filter(
-            applicant=user, verification_status="approved"
-        ).exists():
-            return Response(
-                {"error": "User already has an approved digitization request"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        serializer = CreateApplicationSerializer(data=request.data)
+
+    serializer_class = {
+        "1": ApplicationFieldResponseSerializer,
+    }
+    serializer_class_used = CreateApplicationSerializer
+    if step_number:
+        serializer_class_used = serializer_class.get(
+            step_number, CreateApplicationSerializer
+        )
+
+    if request.method == "POST":
+        if step_number is None:
+            # Step 1: check for existing approved applications
+            if CertificateApplication.objects.filter(
+                applicant=user, application_status="approved"
+            ).exists():
+                return Response(
+                    {"error": "Approved application already exists"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        serializer = serializer_class_used(
+            data=request.data, context={"request": request}
+        )
         if not serializer.is_valid():
             return Response(
                 serializer.errors, status=status.HTTP_400_BAD_REQUEST
             )
-        else:
-            serializer.save(applicant=user)
-            create_audit_log(
-                user=user,
-                action_type="create",
-                table_name="CertificateApplication",
-                description=f"New certificate application initiated by {user.email}",
+
+        instance = serializer.save(applicant=user)
+
+        # Handle file uploads asynchronously via Celery
+        uploaded_file = request.FILES.get("nin_slip")
+        profile_photo = request.FILES.get("profile_photo")
+
+        if uploaded_file:
+            cloudinary_upload_task.delay(
+                uploaded_file.read(),
+                "nin_slip",
+                str(instance.id),
+                "CertificateApplication",
             )
-            # check if the lga has extra fields to be filled
-            extra_fields = LGDynamicField.objects.filter(
-                local_government=serializer.instance.local_government
+        if profile_photo:
+            cloudinary_upload_task.delay(
+                profile_photo.read(),
+                "profile_photo",
+                str(instance.id),
+                "CertificateApplication",
             )
+
+        # Extra LG-specific fields
+        extra_fields = LGDynamicField.objects.filter(
+            local_government=instance.local_government
+        )
+
+        create_audit_log(
+            user=user,
+            action_type="create",
+            table_name="CertificateApplication",
+            description=f"Certificate application step {step_number or 1} initiated by {user.email}",
+        )
+
+        return Response(
+            {
+                "data": serializer.data,
+                "extra_fields": [
+                    {
+                        "field_label": f.field_label,
+                        "field_name": f.field_name,
+                        "field_type": f.field_type,
+                        "is_required": f.is_required,
+                    }
+                    for f in extra_fields
+                ],
+                "application_id": str(instance.id),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    elif request.method == "PATCH":
+        if not application_id:
             return Response(
-                {
-                    "data": serializer.data,
-                    "extra_fields": [
-                        {
-                            "field_label": f.field_label,
-                            "field_name": f.field_name,
-                            "field_type": f.field_type,
-                            "is_required": f.is_required,
-                        }
-                        for f in extra_fields
-                    ],
-                    "application_id": str(serializer.instance.id),
-                },
-                status=status.HTTP_201_CREATED,
+                {"error": "application_id is required for PATCH"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
+
+        try:
+            instance = CertificateApplication.objects.get(
+                id=application_id, applicant=user
+            )
+        except CertificateApplication.DoesNotExist:
+            return Response(
+                {"error": "Application not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = serializer_class_used(
+            instance,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        instance = serializer.save()
+
+        # Handle any new file uploads
+        # file_fields = getattr(serializer, "file_fields", [])
+        # for file_field in file_fields:
+        #     uploaded_file = request.FILES.get(file_field)
+        #     if uploaded_file:
+        #         cloudinary_upload_task.delay(
+        #             uploaded_file.read(),
+        #             file_field,
+        #             str(instance.id),
+        #             CertificateApplication,
+        #         )
+
+        create_audit_log(
+            user=user,
+            action_type="update",
+            table_name="CertificateApplication",
+            description=f"Certificate application step {step_number} updated by {user.email}",
+        )
+
+        return Response({"data": serializer.data}, status=status.HTTP_200_OK)
 
 
 @api_view(["GET", "POST"])
@@ -844,38 +916,6 @@ def lg_admin_local_government_fee(request, pk):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def handle_uploads(request):
-    """
-    Handles file uploads asynchronously via Celery.
-
-    Expects multipart/form-data with:
-        - file: the uploaded file
-        - file_type: the purpose (e.g., 'nin_slip', 'profile_photo')
-
-    Returns:
-        {
-            "task_id": "<celery_task_id>"
-        }
-    """
-    serializer = FileUploadSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-
-    uploaded_file = serializer.validated_data.get("file")
-    file_type = serializer.validated_data.get("file_type")
-    if not uploaded_file or not file_type:
-        return Response(
-            {"error": "File and file_type are required"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        for chunk in uploaded_file.chunks():
-            tmp_file.write(chunk)
-        tmp_file_path = tmp_file.name
-    task = cloudinary_upload_task.delay(tmp_file_path, file_type)
-    return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
-
-
 @api_view(["GET"])
 def upload_status(request, task_id) -> Response:
     """Request status for an asynchronous upload

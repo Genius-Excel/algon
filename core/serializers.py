@@ -1,9 +1,8 @@
 from django.utils import timezone
 from rest_framework import serializers
-import datetime
 
 from core.models import (
-    AdminPermission,
+    ApplicationFieldResponse,
     CertificateApplication,
     DigitizationRequest,
     LGDynamicField,
@@ -151,19 +150,6 @@ class CreateApplicationSerializer(serializers.Serializer):
         if not local_govt:
             raise serializers.ValidationError("Local government not found")
         attrs.update({"local_government": local_govt})
-        # dynamic_fields = LGDynamicField.objects.filter(
-        #     local_government=local_govt, is_required=True
-        # )
-        #
-        # for field in dynamic_fields:
-        #     if field.field_name not in attrs.get(field.field_name):
-        #         raise serializers.ValidationError(
-        #             {
-        #                 field.field_name: f"{field.field_label} is "
-        #                 f"required for {local_govt_name}"
-        #             }
-        #         )
-
         return attrs
 
     def create(self, validated_data):
@@ -236,9 +222,15 @@ class DigitizationRequestSerializer(serializers.ModelSerializer):
         model = DigitizationRequest
 
 
-class FileUploadSerializer(serializers.Serializer):
-    file = serializers.FileField(required=True)
-    file_type = serializers.CharField(max_length=30)
+class ApplicationFieldResponseSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        fields = "__all__"
+        model = ApplicationFieldResponse
+
+
+class CreateApplicationStep2Serializer(serializers.Serializer):
+    pass
 
 
 class ApplicationSerializer(serializers.ModelSerializer):

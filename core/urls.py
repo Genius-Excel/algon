@@ -20,10 +20,9 @@ urlpatterns = [
     ),
     path(
         "application-fees/local-government",
-        views.local_goverment_fees,
+        views.lg_admin_local_government_fee,
         name="local govt application fee",
     ),
-    path("uploads", views.handle_uploads, name="handle file uploads"),
     path(
         "upload-status/<str:task_id>",
         views.upload_status,
