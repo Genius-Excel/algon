@@ -999,7 +999,6 @@ def initiate_payment(request):
         new_request.update({"application": model_object.id})
         new_request.update({"email": user.email})
 
-        print(request.data)
         if payment_type.lower() == "digitization":
             digitization_request = DigitizationRequest.objects.filter(
                 id=application_id
@@ -1016,6 +1015,7 @@ def initiate_payment(request):
                 )
                 payment_data = extract_payment_data(serializer.data)
                 paystack_response = paystack_url_generate(**payment_data)
+                serializer.save()
                 if paystack_response.status_code == 200:
                     response = paystack_response.json()
                     return Response(response, status=status.HTTP_200_OK)
@@ -1035,6 +1035,7 @@ def initiate_payment(request):
                 description="Payment initiated by user for digitizing certificate",
                 request=request,
             )
+            serializer.save()
             payment_data = extract_payment_data(serializer.data)
             paystack_response = paystack_url_generate(
                 **payment_data, email=user.email
