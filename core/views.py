@@ -9,6 +9,7 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
+from rest_framework.views import PermissionDenied
 from celery.result import AsyncResult
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
@@ -36,13 +37,16 @@ from .models import (
     LGDynamicField,
     LGFee,
     LocalGovernment,
+    Payment,
     Role,
 )
 from .utils import (
+    extract_payment_data,
     generate_random_id,
     generate_username,
     create_audit_log,
     get_request_info,
+    paystack_url_generate,
     validate_nin_number,
     generate_email_confirmation_token,
     send_email_with_html_template,
@@ -50,11 +54,12 @@ from .utils import (
 from .serializers import (
     ApplicationFieldResponseSerializer,
     ApplicationSerializer,
-    CreateApplicationStep2Serializer,
+    DigitizationPaymentSerializer,
     DigitizationRequestSerializer,
     DigitizationSerializer,
     LGDynamicFieldSerializer,
     LGFeeSerializer,
+    PaymentSerializer,
     UserRegistrationSerializer,
     UserLoginSerializer,
     UserLogoutSerializer,
@@ -64,7 +69,7 @@ from .serializers import (
 
 from .throttles import ResetEmailTwoCallsPerHour
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 
 
 User = get_user_model()
@@ -571,9 +576,7 @@ def change_password(request):
 
 @api_view(["POST", "PATCH"])
 @permission_classes([IsAuthenticated, IsApplicantUser])
-def create_certificate_application(
-    request, step_number=None, application_id=None
-):
+def applicant_certificate_application(request):
     """
     Multi-step Certificate Application for applicants.
 
@@ -582,208 +585,164 @@ def create_certificate_application(
     """
     user = request.user
 
-    serializer_class = {
-        "1": ApplicationFieldResponseSerializer,
-    }
     serializer_class_used = CreateApplicationSerializer
-    if step_number:
-        serializer_class_used = serializer_class.get(
-            step_number, CreateApplicationSerializer
-        )
 
-    if request.method == "POST":
-        if step_number is None:
-            # Step 1: check for existing approved applications
-            if CertificateApplication.objects.filter(
-                applicant=user, application_status="approved"
-            ).exists():
-                return Response(
-                    {"error": "Approved application already exists"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        serializer = serializer_class_used(
-            data=request.data, context={"request": request}
-        )
-        if not serializer.is_valid():
-            return Response(
-                serializer.errors, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        instance = serializer.save(applicant=user)
-
-        # Handle file uploads asynchronously via Celery
-        uploaded_file = request.FILES.get("nin_slip")
-        profile_photo = request.FILES.get("profile_photo")
-
-        if uploaded_file:
-            cloudinary_upload_task.delay(
-                uploaded_file.read(),
-                "nin_slip",
-                str(instance.id),
-                "CertificateApplication",
-            )
-        if profile_photo:
-            cloudinary_upload_task.delay(
-                profile_photo.read(),
-                "profile_photo",
-                str(instance.id),
-                "CertificateApplication",
-            )
-
-        # Extra LG-specific fields
-        extra_fields = LGDynamicField.objects.filter(
-            local_government=instance.local_government
-        )
-
-        create_audit_log(
-            user=user,
-            action_type="create",
-            table_name="CertificateApplication",
-            description=f"Certificate application step {step_number or 1} initiated by {user.email}",
-        )
-
+    if CertificateApplication.objects.filter(
+        applicant=user, application_status="approved"
+    ).exists():
         return Response(
-            {
-                "data": serializer.data,
-                "extra_fields": [
-                    {
-                        "field_label": f.field_label,
-                        "field_name": f.field_name,
-                        "field_type": f.field_type,
-                        "is_required": f.is_required,
-                    }
-                    for f in extra_fields
-                ],
-                "application_id": str(instance.id),
-            },
-            status=status.HTTP_201_CREATED,
+            {"error": "Approved application already exists"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
-    elif request.method == "PATCH":
-        if not application_id:
-            return Response(
-                {"error": "application_id is required for PATCH"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    serializer = serializer_class_used(
+        data=request.data, context={"request": request}
+    )
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            instance = CertificateApplication.objects.get(
-                id=application_id, applicant=user
-            )
-        except CertificateApplication.DoesNotExist:
-            return Response(
-                {"error": "Application not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+    instance = serializer.save(applicant=user)
 
-        serializer = serializer_class_used(
-            instance,
-            data=request.data,
-            partial=True,
-            context={"request": request},
+    # Handle file uploads asynchronously via Celery
+    uploaded_file = request.FILES.get("nin_slip")
+    profile_photo = request.FILES.get("profile_photo")
+
+    if uploaded_file:
+        cloudinary_upload_task.delay(
+            uploaded_file.read(),
+            "nin_slip",
+            str(instance.id),
+            "CertificateApplication",
         )
+    if profile_photo:
+        cloudinary_upload_task.delay(
+            profile_photo.read(),
+            "profile_photo",
+            str(instance.id),
+            "CertificateApplication",
+        )
+
+    # Extra LG-specific fields
+    extra_fields = LGDynamicField.objects.filter(
+        local_government=instance.local_government
+    )
+
+    create_audit_log(
+        user=user,
+        action_type="create",
+        table_name="CertificateApplication",
+        description=f"Certificate application step {step_number or 1} initiated by {user.email}",
+    )
+
+    return Response(
+        {
+            "data": serializer.data,
+            "extra_fields": [
+                {
+                    "field_label": f.field_label,
+                    "field_name": f.field_name,
+                    "field_type": f.field_type,
+                    "is_required": f.is_required,
+                    "field_id": str(f.id),
+                }
+                for f in extra_fields
+            ],
+            "application_id": str(instance.id),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsApplicantUser])
+def certificate_application_second_step(request, application_id):
+    """
+        Handle the second step of the certificate application process.
+        This view processes POST requests to handle the second step of a certificate application.
+        It validates the provided data and updates the corresponding CertificateApplication instance.
+    Args:
+        request (HttpRequest): The HTTP request object containing the application data.
+        application_id (str): The ID of the CertificateApplication instance to be updated.
+    Returns:
+        Response: A DRF Response object with a success or error message and appropriate HTTP status code.
+    """
+
+    if not application_id:
+        return Response(
+            {"error": "application_id is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    user = request.user
+
+    try:
+        application_instance = CertificateApplication.objects.get(
+            id=application_id, applicant=user
+        )
+        residential_address = request.data.get("residential_address", None)
+        landmark = request.data.get("landmark", None)
+        application_instance.residential_address = residential_address
+        application_instance.landmark = landmark
+        application_instance.save()
+    except CertificateApplication.DoesNotExist:
+        return Response(
+            {"error": "Application not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    extra_fields = request.data.get("extra_fields", {})
+    # application_field = LGDynamicField.objects.filter(
+    #     local_government=instance.local_government,
+    # )
+    for field_data in extra_fields:
+        field_id = field_data.get("field_id", None)
+        lg_field = LGDynamicField.objects.filter(id=field_id).first()
+        if not lg_field:
+            continue
+        field_data["field"] = lg_field.id
+        field_data["application"] = application_instance.id
+
+        serializer = ApplicationFieldResponseSerializer(
+            data=field_data,
+        )
+        response_instance = serializer.validated_data.get("id")
         if not serializer.is_valid():
             return Response(
                 serializer.errors, status=status.HTTP_400_BAD_REQUEST
             )
-
-        instance = serializer.save()
-
-        # Handle any new file uploads
-        # file_fields = getattr(serializer, "file_fields", [])
-        # for file_field in file_fields:
-        #     uploaded_file = request.FILES.get(file_field)
-        #     if uploaded_file:
-        #         cloudinary_upload_task.delay(
-        #             uploaded_file.read(),
-        #             file_field,
-        #             str(instance.id),
-        #             CertificateApplication,
-        #         )
+        # get the field_type
+        field_type = getattr(lg_field, "field_type", None)
+        if field_type == "file":
+            uploaded_file = request.FILES.get(lg_field.field_label)
+            if uploaded_file:
+                cloudinary_upload_task.delay(
+                    file_bytes=uploaded_file.read(),
+                    file_type="field_value",
+                    application_id=str(response_instance),
+                    model="ApplicationFieldResponse",
+                )
+            else:
+                continue
+        serializer.save()
 
         create_audit_log(
             user=user,
             action_type="update",
             table_name="CertificateApplication",
-            description=f"Certificate application step {step_number} updated by {user.email}",
+            description=f"Certificate application updated by {user.email}",
         )
-
-        return Response({"data": serializer.data}, status=status.HTTP_200_OK)
-
-
-@api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def additional_registration_requirements(request):
-    """
-    Retrieve additional registration requirements for a given Local Government.
-
-    Example:
-        GET /api/requirements?lga=Ikoyi
-        POST /api/requirements
-
-    Returns:
-        200: List of required fields for that LGA
-        400: If LGA not found or missing
-    """
-    if request.method == "GET":
-        lga_param = request.query_params.get("lga", None)
-        state_param = request.query_params.get("state", None)
-        if not lga_param:
-            return Response(
-                {"error": "Missing lga query param"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not state_param:
-            return Response(
-                {"error": "Missing state query param"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        local_goverment = LocalGovernment.objects.filter(
-            name__iexact=lga_param, state__name__iexact=state_param.strip()
+        # get the amount charged for the application by the local government
+        local_government_fee = LGFee.objects.filter(
+            local_government=application_instance.local_government
         ).first()
-        if not local_goverment:
-            return Response(
-                {"error": "Local government under state does not exist"}
-            )
-        dynamic_fields = LGDynamicField.objects.filter(
-            local_government=local_goverment
-        )
-        data = [
-            {
-                "field_label": f.field_label,
-                "field_name": f.field_name,
-                "field_type": f.field_type,
-                "is_required": f.is_required,
-            }
-            for f in dynamic_fields
-        ]
 
-        return Response({"data": data}, status=status.HTTP_200_OK)
-
-    if request.method == "POST":
-        # confirm that the user is allowed to create extra fields
-        # TODO: check the local government the user is assigned to. needed to attach fields to the model
-        user = request.user
-        if user.role != "lg_admin":
-            return Response(
-                {
-                    "error": "Unable to perform action",
-                    status: status.HTTP_403_FORBIDDEN,
-                }
-            )
-
-        serializer = LGDynamicFieldSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save(created_by=user)
-
+        serialized_fee = LGFeeSerializer(local_government_fee)
         return Response(
-            {"data": serializer.data}, status=status.HTTP_201_CREATED
+            {"data": serializer.data, "fee": serialized_fee},
+            status=status.HTTP_200_OK,
         )
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsApplicantUser])
 def verify_certificate(request):
     """
     Verify the status of a certificate
@@ -915,23 +874,6 @@ def lg_admin_local_government_fee(request, pk):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
-@api_view(["GET"])
-def upload_status(request, task_id) -> Response:
-    """Request status for an asynchronous upload
-    Args:
-        request: Request
-    Returns:
-        Response object with the data dict
-    """
-    result = AsyncResult(task_id)
-    data = {"status": result.status}
-    if result.ready() and result.successful():
-        data["file_url"] = result.result
-    return Response(data)
-
-
-@api_view(["POST"])
 @permission_classes([IsAuthenticated, IsApplicantUser])
 def certificate_digitization(request):
     user = request.user
@@ -960,7 +902,7 @@ def certificate_digitization(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsApplicantUser])
 def initiate_payment(request):
     """
     Initiate a payment for different types of services in the system.
@@ -968,7 +910,6 @@ def initiate_payment(request):
     This endpoint supports payments for:
         - Certificate Applications
         - Digitization Requests
-        - (Extendable to other payment types)
 
     The frontend must provide the following in the request body:
         - payment_type (str): Type of payment
@@ -1007,28 +948,23 @@ def initiate_payment(request):
     """
     user = request.user
     data = request.data
-    role = getattr(user.role, "name", "")
-    if role != "applicant":
-        return Response(
-            {"error": "User is not an applicant"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
+    application_id = data.get("application_id")
     payment_type = data.get("payment_type")
-    model_id = data.get("related_id")
-    payment_gateway = data.get("payment_gateway", "paystack")
     amount = data.get("amount", None)
 
     model_object = None
 
-    if not payment_type or not model_id or not amount:
+    if not payment_type or not amount or not application_id:
         return Response(
-            {"error": "payment_type, related_id and amount are required"},
+            {"error": "payment_type, application id and amount are required"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     if payment_type.lower() == "application":
-        model_object = get_object_or_404(CertificateApplication, id=model_id)
-        if model_object.application != user:
+        model_object = get_object_or_404(
+            CertificateApplication, id=application_id
+        )
+        if model_object.applicant != user:
             return Response(
                 {"error": "Payment must be initiated by the applicant"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -1036,17 +972,19 @@ def initiate_payment(request):
         # create the transaction entry
 
     elif payment_type.lower() == "digitization":
-        model_object = get_object_or_404(DigitizationRequest, id=model_id)
-        if model_object.application != user:
+        model_object = get_object_or_404(
+            DigitizationRequest, id=application_id
+        )
+        if model_object.applicant != user:
             return Response(
                 {"error": "Payment must be initiated by the applicant"},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        reference = generate_random_id(prefix="TRX", use_separator=True)
-
     else:
         return Response(
-            {"error": "Unsupported payment type"},
+            {
+                "error": "Unsupported payment type - must be 'application' or 'digitization'"
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1054,33 +992,94 @@ def initiate_payment(request):
         reference = generate_random_id(
             prefix="TRX", use_separator=True, separator="-"
         )
+        new_request = request.data.copy()
+        new_request.update({"payment_reference": reference})
 
+        new_request.update({"user": user.id})
+        new_request.update({"application": model_object.id})
+        new_request.update({"email": user.email})
+
+        print(request.data)
         if payment_type.lower() == "digitization":
             digitization_request = DigitizationRequest.objects.filter(
-                id=model_id
+                id=application_id
             ).first()
             if digitization_request:
-                payment_entry = DigitizationPayment.objects.create(
-                    amount=amount,
-                    payment_reference=reference,
-                    payment_gateway=payment_gateway,
-                    user=user,
-                    digitization_request=digitization_request,
-                )
+                serializer = DigitizationPaymentSerializer(data=new_request)
+                serializer.is_valid(raise_exception=True)
                 create_audit_log(
                     user=user,
                     action_type="create",
                     table_name="DigitizationPayment",
                     description="Payment initiated by user for digitizing certificate",
+                    request=request,
                 )
-                # send to the relevant payment api
-                return Response(
-                    {
-                        "message": f"{payment_type.capitalize()} payment initiated",
-                        "payment_id": str(payment_entry.id),
-                    },
-                    status=status.HTTP_201_CREATED,
-                )
+                payment_data = extract_payment_data(serializer.data)
+                paystack_response = paystack_url_generate(**payment_data)
+                if paystack_response.status_code == 200:
+                    response = paystack_response.json()
+                    return Response(response, status=status.HTTP_200_OK)
+                else:
+                    response = paystack_response.json()
+                    return Response(
+                        response, status=status.HTTP_400_BAD_REQUEST
+                    )
+
+        elif payment_type.lower().strip() == "application":
+            serializer = PaymentSerializer(data=new_request)
+            serializer.is_valid(raise_exception=True)
+            create_audit_log(
+                user=user,
+                action_type="create",
+                table_name="Payment",
+                description="Payment initiated by user for digitizing certificate",
+                request=request,
+            )
+            payment_data = extract_payment_data(serializer.data)
+            paystack_response = paystack_url_generate(
+                **payment_data, email=user.email
+            )
+            if paystack_response.status_code == 200:
+                response = paystack_response.json()
+                return Response(response, status=status.HTTP_200_OK)
+            else:
+                response = paystack_response.json()
+                return Response(response, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsLGAdmin])
+def create_dynamic_response_field(request):
+
+    user = request.user
+
+    local_government = request.data.get("local_government", None)
+    if not local_government:
+        return Response({"error": "Local government not provided"}, status=400)
+
+    lg = user.admin_permissions.filter(
+        local_government=local_government
+    ).first()
+    if not lg:
+        return Response(
+            {"error": "You are not assigned to the provided local government"},
+            status=400,
+        )
+    self_check = IsLGAdmin()
+    can_create = self_check.has_object_permission(request, None, lg)
+    if not can_create:
+        return Response(
+            {
+                "error": "You are not permitted to create additional fields for this local government"
+            },
+            status=403,
+        )
+
+    serializer = LGDynamicFieldSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(created_by=user)
+
+    return Response(serializer.data, status=200)
 
 
 @api_view(["GET"])
@@ -1091,7 +1090,6 @@ def manage_applications(request):
         "application_type", "certificate"
     )  # default to certificate if none
     allowd_params = ["certificate", "digitization"]
-    info = get_request_info(request)
 
     if application_type not in allowd_params:
         return Response(
@@ -1109,14 +1107,14 @@ def manage_applications(request):
             applicant=user
         )
         serializer = DigitizationSerializer(digitization_requests, many=True)
-    AuditLog.objects.create(
+    create_audit_log(
         table_name="CertificateApplication",
         user=user,
         action_type="view",
         description=f"{user.email} viewed their certificate applications",
-        ip_address=info.get("ip", None),
-        user_agent=info.get("user_agent", None),
+        request=request,
     )
+
     return Response(serializer.data, status=200)
 
 
@@ -1135,7 +1133,6 @@ def manage_all_applicants_application(request):
         403 Forbidden: If user lacks permission.
     """
     user = request.user
-    info = get_request_info(request)
     application_type = request.query_params.get(
         "application_type", "certificate"
     ).lower()
@@ -1162,13 +1159,12 @@ def manage_all_applicants_application(request):
     queryset = model.objects.filter(local_government__in=admin_lgs)
     serializer = serializer_class(queryset, many=True)
 
-    AuditLog.objects.create(
+    create_audit_log(
         description=f"{user.email} viewed all {application_type} applications",
         table_name=model.__name__,
         action_type="view",
-        ip_address=info.get("ip"),
-        user_agent=info.get("user_agent"),
         user=user,
+        request=request,
     )
 
     return Response(serializer.data, status=status.HTTP_200_OK)

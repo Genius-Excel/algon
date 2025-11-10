@@ -15,18 +15,13 @@ urlpatterns = [
     ),
     path(
         "certificates/applications",
-        views.create_certificate_application,
+        views.applicant_certificate_application,
         name="certificate apply",
     ),
     path(
         "application-fees/local-government",
         views.lg_admin_local_government_fee,
         name="local govt application fee",
-    ),
-    path(
-        "upload-status/<str:task_id>",
-        views.upload_status,
-        name="upload status",
     ),
     path(
         "certificate/digitization",
@@ -57,5 +52,15 @@ urlpatterns = [
         "digitization/overview",
         views.lg_digitization_overview,
         name="lg digitization overview",
+    ),
+    path(
+        "admin/create-response-field",
+        views.create_dynamic_response_field,
+        name="Create dynaic response field",
+    ),
+    path(
+        "certificate/initiate-payment",
+        views.initiate_payment,
+        name="initiate payment",
     ),
 ]

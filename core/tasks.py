@@ -2,6 +2,7 @@ from django.db.models import ObjectDoesNotExist
 from celery import shared_task
 import logging
 
+from core.models import ApplicationFieldResponse
 from core.utils import upload_file_to_cloudinary
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ def cloudinary_upload_task(self, file_bytes, file_type, application_id, model):
     allowed_models = {
         "CertificateApplication": CertificateApplication,
         "DigitizationRequest": DigitizationRequest,
+        "ApplicationFieldResponse": ApplicationFieldResponse,
     }
     selected_model = allowed_models.get(model, None)
     if not selected_model:

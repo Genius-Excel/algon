@@ -4,10 +4,12 @@ from rest_framework import serializers
 from core.models import (
     ApplicationFieldResponse,
     CertificateApplication,
+    DigitizationPayment,
     DigitizationRequest,
     LGDynamicField,
     LGFee,
     LocalGovernment,
+    Payment,
     State,
 )
 from core.utils import validate_nin_number
@@ -159,6 +161,18 @@ class CreateApplicationSerializer(serializers.Serializer):
 class LGDynamicFieldSerializer(serializers.ModelSerializer):
     class Meta:
         model = LGDynamicField
+        fields = "__all__"
+
+
+class PaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payment
+        fields = "__all__"
+
+
+class DigitizationPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DigitizationPayment
         fields = "__all__"
 
 

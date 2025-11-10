@@ -31,9 +31,15 @@ class IsLGAdmin(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         # check if the user can approve requests for their local government
+        # try to query based on local governemt
+        lg = getattr(obj.local_government, "name", "")
         return (
-            request.user.admin_permissions.local_governemt
-            == obj.local_government
+            obj
+            if lg
+            else obj.local_government
+            in request.user.admin_permissions.values_list(
+                "local_government", flat=True
+            )
         )
 
 

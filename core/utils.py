@@ -1,4 +1,5 @@
 import random
+import httpx
 import string
 import tempfile
 import mailtrap as mt
@@ -288,3 +289,39 @@ def get_user_role(user):
 #         tmp_file_path, file_type, application_id
 #     )
 #     return {"task_id": task.id}
+
+
+def extract_payment_data(data):
+    """extract payment data from request data"""
+    payment_data = {
+        "amount": data.get("amount"),
+        "reference": data.get("reference"),
+        "callback_url": data.get("callback_url"),
+    }
+
+    return payment_data
+
+
+def paystack_url_generate(
+    amount: int,
+    email: str,
+    reference: str,
+    callback_url: str,
+):
+    """Generate a paystack payment url"""
+    with httpx.Client() as client:
+        url = "https://api.paystack.co/transaction/initialize"
+        headers = {
+            "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
+            "Content-Type": "application/json",
+        }
+        amount = int(float(amount))
+        payload = {
+            "amount": amount * 100,
+            "email": email,
+            "reference": reference,
+            "callback_url": callback_url,
+        }
+        response = client.post(url, headers=headers, json=payload)
+
+        return response
