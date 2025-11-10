@@ -252,56 +252,37 @@ class ApplicationSerializer(serializers.ModelSerializer):
         fields = "__all__"
         model = CertificateApplication
 
-    def validate(self, attrs):
-        request_context = self.context.get("request")
-        user = request_context.user if request_context else None
-
-        if not user or not user.is_authenticated:
-            raise serializers.ValidationError(
-                "User not provided or not authenticated"
-            )
-
-        permissions = AdminPermission.objects.filter(admin=user).first()
-        if not permissions or not permissions.can_approve:
-            raise serializers.ValidationError(
-                "User not authorized to approve/reject applications"
-            )
-        certificate = attrs.get("certificate_id")
-        if certificate.local_government != permissions.local_government:
-            raise serializers.ValidationError(
-                "User not authorized to approve/reject applications in this local_government"
-            )
-        if certificate.payment_status != "paid":
-            raise serializers.ValidationError(
-                "Application has not been paid for"
-            )
-
-        return attrs
-
     def update(self, instance, validated_data):
         action = validated_data.pop("action", None)
+        request = self.context.get("request")
+        if not request:
+            return
         if action == "approved":
             if instance.application_status == action:
                 raise serializers.ValidationError(
-                    "Application already approved"
+                    f"Application already {action}"
                 )
-            if action == "approved" and instance.payment_status != "paid":
+            # cross check that there is a paid payment entry for this application
+            instance_payments = instance.payments.filter(
+                payment_status="paid"
+            ).exists()
+            if (
+                action == "approved"
+                and instance.payment_status != "paid"
+                and not instance_payments
+            ):
                 raise serializers.ValidationError(
                     "Certificate Application request has not been paid for"
                 )
             instance.application_status = action
             instance.approved_at = timezone.now()
+            instance.approved_by = request.user
         elif action == "rejected":
             if instance.application_status == action:
                 raise serializers.ValidationError(
                     f"Application already {action}"
                 )
             instance.application_status = action
-        request = self.context.get("request")
-        if not request:
-            return
-        if action == "approved":
-            instance.approved_by = request.user
         instance.save()
         return instance
 
@@ -311,6 +292,16 @@ class ApplicationSerializer(serializers.ModelSerializer):
             representation["approved_by"] = {
                 "id": instance.approved_by.id,
                 "email": instance.approved_by.email,
+            }
+        if instance.local_government:
+            representation["local_government"] = {
+                "id": instance.local_government.id,
+                "name": instance.local_government.name,
+            }
+        if instance.state:
+            representation["state"] = {
+                "id": instance.local_government.state.id or "",
+                "name": instance.local_government.state.name or "",
             }
         return representation
 
@@ -325,32 +316,6 @@ class DigitizationSerializer(serializers.ModelSerializer):
         fields = "__all__"
         model = DigitizationRequest
 
-    def validate(self, attrs):
-        request_context = self.context.get("request")
-        user = request_context.user if request_context else None
-
-        if not user or not user.is_authenticated:
-            raise serializers.ValidationError(
-                "User not provided or not authenticated"
-            )
-
-        digitization = self.context.get("digitization")
-
-        permissions = AdminPermission.objects.filter(
-            admin=user, local_government=digitization.local_government
-        ).first()
-
-        if not permissions or not permissions.can_approve:
-            raise serializers.ValidationError(
-                "User not authorized to approve/reject digitization requests"
-            )
-        if digitization.local_government != permissions.local_government:
-            raise serializers.ValidationError(
-                "User not authorized to approve/reject digitization requests in this local_government"
-            )
-
-        return attrs
-
     def update(self, instance, validated_data):
         action = validated_data.pop("action", None)
         request = self.context.get("request")
@@ -361,7 +326,16 @@ class DigitizationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     f"Digitization request already {action}"
                 )
-            if action == "approved" and instance.payment_status != "paid":
+            # cross check that there is a paid payment entry for this digitization
+            # makred as paid still needs to be cross checked with payment entries
+            digitization_payments = instance.payments.filter(
+                payment_status="paid"
+            ).exists()
+            if (
+                action == "approved"
+                and instance.payment_status != "paid"
+                and not digitization_payments
+            ):
                 raise serializers.ValidationError(
                     "Digitization request has not been paid for"
                 )

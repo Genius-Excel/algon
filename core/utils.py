@@ -13,7 +13,6 @@ from core.models import AuditLog
 from django.utils import timezone
 
 from django.core.exceptions import PermissionDenied
-from core.permissions import ROLE_PERMISSIONS  # adjust path as needed
 
 
 def generate_username(length=10):
@@ -287,3 +286,10 @@ def user_has_permission(user, permission_code, raise_exception=False):
     if not has_perm and raise_exception:
         raise PermissionDenied(f"Missing permission: {permission_code}")
     return has_perm
+
+
+def get_user_role(user):
+    """
+    Returns the role name of the user.
+    """
+    return getattr(user.role, "name", None)

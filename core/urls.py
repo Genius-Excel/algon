@@ -36,23 +36,27 @@ urlpatterns = [
     ),
     path(
         "certificates/my-applications",
-        views.my_applications,
+        views.manage_applications,
         name="My applications",
     ),
     path(
-        "certificates/<str:id>",
-        views.update_applications,
-        name="Update application status",
+        "admin/dashboard",
+        views.lg_admin_dashboard,
+        name="local govenment admin dashboard",
     ),
-    path("digitization", views.my_digitizations, name="my digitizations"),
+    path(
+        "admin/applications",
+        views.manage_all_applicants_application,
+        name="Manage all applicants applications",
+    ),
+    path(
+        "admin/applications/<str:application_id>",
+        views.manage_single_applicants_application,
+        name="Manage applicants applications",
+    ),
     path(
         "digitization/overview",
         views.lg_digitization_overview,
         name="lg digitization overview",
-    ),
-    path(
-        "digitization/<str:id>",
-        views.update_digitization,
-        name="my digitizations",
     ),
 ]

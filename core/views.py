@@ -1,7 +1,7 @@
 import tempfile
 from django.db import transaction
 from django.conf import settings
-from django.db.models import Count
+from django.db.models import Count, Sum
 from django.http import JsonResponse
 from rest_framework import status
 from rest_framework.response import Response
@@ -10,17 +10,11 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
-from rest_framework.utils.serializer_helpers import ReturnList, ReturnDict
 from celery.result import AsyncResult
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError, ObjectDoesNotExist
-from django.contrib.auth.password_validation import (
-    validate_password,
-    ValidationError as PasswordValidationError,
-)
-from django.utils.timezone import localtime
 from django.contrib.auth import (
     password_validation,
     authenticate,
@@ -29,12 +23,14 @@ from django.contrib.auth import (
 )
 from django.db.models.functions import (
     TruncMonth,
-    TruncQuarter,
-    TruncYear,
-    TruncWeek,
 )
-from django.utils.timezone import now
+from django.utils.timezone import now, timedelta
 
+from core.permissions import (
+    CanViewAndApproveRequests,
+    IsApplicantUser,
+    IsLGAdmin,
+)
 from core.tasks import cloudinary_upload_task
 from .models import (
     AdminPermission,
@@ -47,14 +43,12 @@ from .models import (
     LGFee,
     LocalGovernment,
     Role,
-    Transaction,
 )
 from .utils import (
     generate_random_id,
     generate_username,
     create_audit_log,
     get_request_info,
-    upload_file_to_cloudinary,
     validate_nin_number,
     generate_email_confirmation_token,
     send_email_with_html_template,
@@ -77,7 +71,6 @@ from .throttles import ResetEmailTwoCallsPerHour
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework.permissions import IsAuthenticated
 
-from core import serializers
 
 User = get_user_model()
 
@@ -1008,283 +1001,244 @@ def initiate_payment(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def my_applications(request):
+@permission_classes([IsAuthenticated, IsApplicantUser])
+def manage_applications(request):
     user = request.user
-    user_role = getattr(user.role, "name", "")
+    application_type = request.query_params.get(
+        "application_type", "certificate"
+    )  # default to certificate if none
+    allowd_params = ["certificate", "digitization"]
+    info = get_request_info(request)
 
-    if user_role == "applicant":
+    if application_type not in allowd_params:
+        return Response(
+            {
+                "error": "Invalid application type. Must be 'certificate' or 'digitization'."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    serializer = None
+    if application_type == "certificate":
         certificates = CertificateApplication.objects.filter(applicant=user)
-    elif user_role == "lg_admin":
-        admin_perm = AdminPermission.objects.filter(admin=user)
-        if not admin_perm:
-            return Response({"error": "User not permitted"}, status=403)
-        certificates = CertificateApplication.objects.filter(
-            local_government__in=admin_perm.values_list(
-                "local_government", flat=True
-            )
+        serializer = ApplicationSerializer(certificates, many=True)
+    elif application_type == "digitization":
+        digitization_requests = DigitizationRequest.objects.filter(
+            applicant=user
         )
-    else:
-        return Response({"error": "Invalid role"}, status=403)
-
-    serializer = ApplicationSerializer(certificates, many=True)
-    if serializer.data:
-        info = get_request_info(request)
-        description = ""
-
-        if user.role.name == "applicant":
-            description = (
-                f"{user.get_full_name()} viewed their applied certificates"
-            )
-        elif user.role.name == "lg_admin":
-            admin = AdminPermission.objects.filter(admin=user).first()
-            description = (
-                f"{user.email} from {admin.local_government} viewed all applications "
-                f"in their local government"
-            )
-        else:
-            description = (
-                f"{user.email} viewed certificates (unspecified role)"
-            )
-        AuditLog.objects.create(
-            table_name="CertificateApplication",
-            user=user,
-            action_type="view",
-            description=description,
-            ip_address=info.get("ip", None),
-            user_agent=info.get("user_agent", None),
-        )
-    return Response(serializer.data)
+        serializer = DigitizationSerializer(digitization_requests, many=True)
+    AuditLog.objects.create(
+        table_name="CertificateApplication",
+        user=user,
+        action_type="view",
+        description=f"{user.email} viewed their certificate applications",
+        ip_address=info.get("ip", None),
+        user_agent=info.get("user_agent", None),
+    )
+    return Response(serializer.data, status=200)
 
 
-@api_view(["PATCH", "GET"])
-@permission_classes([IsAuthenticated])
-def update_applications(request, id):
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsLGAdmin])
+def manage_all_applicants_application(request):
     """
-    Retrieve or update a CertificateApplication instance.
+    Retrieve all Application instances (certificate or digitization) for LG admins.
+
+    Query Params:
+        - application_type: "certificate" | "digitization" (defaults to "certificate")
+
+    Responses:
+        200 OK: Returns the serialized data list.
+        400 Bad Request: Invalid application_type.
+        403 Forbidden: If user lacks permission.
+    """
+    user = request.user
+    info = get_request_info(request)
+    application_type = request.query_params.get(
+        "application_type", "certificate"
+    ).lower()
+    allowed_params = {"certificate", "digitization"}
+
+    if application_type not in allowed_params:
+        return Response(
+            {
+                "error": "Invalid application type. Must be 'certificate' or 'digitization'."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    admin_lgs = user.admin_permissions.values_list(
+        "local_government", flat=True
+    )
+
+    app_models = {
+        "certificate": (CertificateApplication, ApplicationSerializer),
+        "digitization": (DigitizationRequest, DigitizationSerializer),
+    }
+
+    model, serializer_class = app_models[application_type]
+    queryset = model.objects.filter(local_government__in=admin_lgs)
+    serializer = serializer_class(queryset, many=True)
+
+    AuditLog.objects.create(
+        description=f"{user.email} viewed all {application_type} applications",
+        table_name=model.__name__,
+        action_type="view",
+        ip_address=info.get("ip"),
+        user_agent=info.get("user_agent"),
+        user=user,
+    )
+
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated, CanViewAndApproveRequests])
+def manage_single_applicants_application(request, application_id):
+    """
+    Retrieve or update a CertificateApplication instance for LG admins and super admins.
 
     GET:
         - Returns certificate details if the requesting user has access.
-        - Applicants can view their own certificates.
-        - LG admins can view certificates in their local government.
         - Logs all access attempts in AuditLog.
-
     PATCH:
         - Allows LG admins and super admins to approve or reject a certificate.
         - Checks that the certificate belongs to the admin's assigned local government.
         - Only users with the `can_approve` permission can perform this action.
 
     Path Parameters:
-        - id: UUID of the CertificateApplication to retrieve or update.
-
+        - pk: UUID of the CertificateApplication to retrieve or update.
     Responses:
         200 OK: Successful retrieval or update.
         403 Forbidden: User lacks permissions.
         404 Not Found: Certificate or permissions not found.
         405 Method Not Allowed: Any other HTTP method.
     """
+    allowed_application_types = ["certificate", "digitization"]
     user = request.user
-    user_role = getattr(user.role, "name", "")
-    roles = ["lg_admin", "super_admin"]
     info = get_request_info(request)
 
-    if request.method == "PATCH":
-        certificate = get_object_or_404(CertificateApplication, id=id)
-        if user_role not in roles:
-            return Response(
-                {"error": "User not permitted"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        admin_perm = AdminPermission.objects.filter(
-            local_government=certificate.local_government, admin=user
-        ).exists()
-        if not admin_perm:
-            return Response(
-                "You are not allowed to approve/reject applications outside of your local government",
-                status=403,
-            )
-        serializer = ApplicationSerializer(
-            certificate,
-            data=request.data,
-            partial=True,
-            context={"request": request},
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=200)
-
     if request.method == "GET":
-        application = get_object_or_404(CertificateApplication, id=id)
         action_type = "view"
-        if user_role == "applicant" and application.applicant != user:
+        if not application_id:
+            return Response(
+                {"error": "Application ID is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        application_type = request.query_params.get("application_type", None)
+        if not application_type:
+            return Response(
+                {"error": "Application type query param is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # filter the applications based on type i.e certificate or digitization
+        if application_type not in allowed_application_types:
+            return Response(
+                {"error": "Invalid application type"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if application_type == "certificate":
+            application = get_object_or_404(
+                CertificateApplication, id=application_id
+            )
+
+            view_check = CanViewAndApproveRequests()
+            if not view_check.has_object_permission(
+                request, None, application
+            ):
+                return Response(
+                    {
+                        "error": "User permitted to view application of other local governments"
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            serializer = ApplicationSerializer(application)
             AuditLog.objects.create(
-                description=f"{user.email} tried to access ceritificate {application.id}",
+                description=f"{user.email} viewed {application_type} {application.id}",
                 table_name="CertificateApplication",
-                ip_address=info.get("ip"),
                 action_type=action_type,
+                ip_address=info.get("ip"),
                 user_agent=info.get("user_agent"),
                 user=user,
             )
+            return Response(serializer.data, status=200)
+
+        elif application_type == "digitization":
+            application = get_object_or_404(
+                DigitizationRequest, id=application_id
+            )
+            view_check = CanViewAndApproveRequests()
+            if not view_check.has_object_permission(
+                request, None, application
+            ):
+                return Response(
+                    {
+                        "error": "User not to view application of other local governments"
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            serializer = DigitizationSerializer(application)
+            AuditLog.objects.create(
+                description=f"{user.email} viewed {application_type} {application.id}",
+                table_name="CertificateApplication",
+                action_type=action_type,
+                ip_address=info.get("ip"),
+                user_agent=info.get("user_agent"),
+                user=user,
+            )
+            return Response(serializer.data, status=200)
+
+    if request.method == "PATCH":
+        action_type = "update"
+        if not application_id:
+            return Response(
+                {"error": "Application ID is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        application_type = request.data.get("application_type", None)
+        action = request.data.get("action", None)
+        if not action:
+            return Response(
+                {"error": "Action field is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not application_type:
+            return Response(
+                {"error": "Application type is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # filter the applications based on type i.e certificate or digitization
+        if application_type not in allowed_application_types:
             return Response(
                 {
-                    "error": "You are not allowed to access other applicants' certificates."
+                    "error": "Invalid application type - must be certificate or digitization"
                 },
-                status=403,
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        elif user_role == "lg_admin":
-            admin_perm = AdminPermission.objects.filter(admin=user).first()
-            if not admin_perm:
-                AuditLog.objects.create(
-                    description=f"{user.email} tried to access ceritificate {application.id}",
-                    table_name="CertificateApplication",
-                    ip_address=info.get("ip"),
-                    user_agent=info.get("user_agent"),
-                    action_type=action_type,
-                    user=user,
-                )
-                return Response(
-                    {"error": "Admin permissions not found"}, status=404
-                )
-            if application.local_government != admin_perm.local_government:
-                AuditLog.objects.create(
-                    description=f"{user.email} tried to access ceritificate {application.id}",
-                    table_name="CertificateApplication",
-                    ip_address=info.get("ip"),
-                    user_agent=info.get("user_agent"),
-                    user=user,
-                    action_type=action_type,
-                )
+        if application_type == "certificate":
+            application = get_object_or_404(
+                CertificateApplication, id=application_id
+            )
+            approve_check = CanViewAndApproveRequests()
+            if not approve_check.has_object_permission(
+                request, None, application
+            ):
                 return Response(
                     {
-                        "error": "You are not permitted to view certificates outside your local government."
+                        "error": "User not permitted to approve/reject applications of other local governments"
                     },
-                    status=403,
+                    status=status.HTTP_403_FORBIDDEN,
                 )
-        serializer = ApplicationSerializer(application)
-        AuditLog.objects.create(
-            description=f"{user.email} viewed ceritificate {application.id}",
-            table_name="CertificateApplication",
-            action_type=action_type,
-            ip_address=info.get("ip"),
-            user_agent=info.get("user_agent"),
-            user=user,
-        )
-        return Response(serializer.data, status=200)
-
-    else:
-        return Response({"error": "Method not allowed"}, status=405)
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def my_digitizations(request):
-    """ """
-
-    user = request.user
-    user_role = getattr(user.role, "name", "")
-
-    if request.method == "GET":
-        if user_role == "applicant":
-            digitizations = DigitizationRequest.objects.filter(
-                applicant=user
-            ).all()
-            if not digitizations:
-                return Response([], status=200)
-            serializer = DigitizationSerializer(digitizations, many=True)
-            return Response(serializer.data, status=200)
-        elif user_role == "lg_admin":
-            admin_perm = AdminPermission.objects.filter(admin=user)
-            if not admin_perm:
-                return Response({"error": "User not permitted"}, status=403)
-            digitizations = DigitizationRequest.objects.filter(
-                local_government__in=admin_perm.values_list(
-                    "local_government", flat=True
-                )
+            serializer = ApplicationSerializer(
+                application,
+                data=request.data,
+                partial=True,
+                context={"request": request},
             )
-            serializer = DigitizationSerializer(digitizations, many=True)
-            return Response(serializer.data, status=200)
-
-
-@api_view(["GET", "PATCH"])
-@permission_classes([IsAuthenticated])
-def update_digitization(request, id):
-    """
-    Retrieve or update a DigitizationRequest instance.
-
-    GET:
-        - Returns digitization request details if the requesting user has access.
-        - Applicants can view their own requests.
-        - LG admins can view requests in their local government.
-        - Logs all access attempts in AuditLog.
-    """
-    user = request.user
-    if request.method == "GET":
-        digitization = get_object_or_404(DigitizationRequest, id=id)
-        action_type = "view"
-        info = get_request_info(request)
-        if user.role.name == "applicant":
-            if digitization.applicant != user:
-                AuditLog.objects.create(
-                    description=f"{user.email} tried to access digitization request {digitization.id}",
-                    table_name="DigitizationRequest",
-                    ip_address=info.get("ip"),
-                    action_type=action_type,
-                    user=user,
-                    user_agent=info.get("user_agent"),
-                )
-                return Response(
-                    {
-                        "error": "You are not allowed to access other applicants' digitization requests."
-                    },
-                    status=403,
-                )
-            serialier = DigitizationSerializer(digitization)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
             AuditLog.objects.create(
-                description=f"{user.email} viewed digitization request {digitization.id}",
-                table_name="DigitizationRequest",
-                action_type=action_type,
-                ip_address=info.get("ip"),
-                user=user,
-                user_agent=info.get("user_agent"),
-            )
-            return Response(serialier.data, status=200)
-
-        elif user.role.name == "lg_admin":
-            admin_perm = AdminPermission.objects.filter(
-                admin=user
-            ).values_list("local_government", flat=True)
-            if not admin_perm:
-                AuditLog.objects.create(
-                    description=f"{user.email} tried to access digitization request {digitization.id}",
-                    table_name="DigitizationRequest",
-                    ip_address=info.get("ip"),
-                    user_agent=info.get("user_agent"),
-                    action_type=action_type,
-                    user=user,
-                )
-                return Response(
-                    {"error": "Admin permissions not found"}, status=404
-                )
-            if digitization.local_government not in admin_perm:
-                AuditLog.objects.create(
-                    description=f"{user.email} tried to access digitization request {digitization.id}",
-                    table_name="DigitizationRequest",
-                    ip_address=info.get("ip"),
-                    user_agent=info.get("user_agent"),
-                    action_type=action_type,
-                    user=user,
-                )
-                return Response(
-                    {
-                        "error": "You are not permitted to view digitization requests outside your local government."
-                    },
-                    status=403,
-                )
-            serializer = DigitizationSerializer(digitization)
-            AuditLog.objects.create(
-                description=f"{user.email} viewed digitization request {digitization.id}",
-                table_name="DigitizationRequest",
+                description=f"{user.email} {action} {application_type} with {application.id}",
+                table_name="CertificateApplication",
                 action_type=action_type,
                 ip_address=info.get("ip"),
                 user_agent=info.get("user_agent"),
@@ -1292,50 +1246,33 @@ def update_digitization(request, id):
             )
             return Response(serializer.data, status=200)
 
-    if request.method == "PATCH":
-        info = get_request_info(request)
-        digitization = get_object_or_404(DigitizationRequest, id=id)
-        if user.role.name != "lg_admin":
-            return Response(
-                {"error": "User not permitted"},
-                status=status.HTTP_403_FORBIDDEN,
+        elif application_type == "digitization":
+            application = get_object_or_404(
+                DigitizationRequest, id=application_id
             )
-
-        admin_perm = AdminPermission.objects.filter(
-            local_government=digitization.local_government, admin=user
-        ).exists()
-        if not admin_perm:
-            return Response(
-                "You are not allowed to approve/reject digitization requests outside of your local government",
-                status=403,
+            approve_check = CanViewAndApproveRequests()
+            if not approve_check.has_object_permission(
+                request, None, application
+            ):
+                return Response(
+                    {
+                        "error": "User not permitted to approve/reject applications of other local governments"
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            serializer = DigitizationSerializer(
+                application,
+                data=request.data,
+                partial=True,
+                context={"request": request},
             )
-
-        AuditLog.objects.create(
-            description=f"{user.email} attempted action '{request.data.get('action', 'N/A')}' on digitization request {getattr(digitization, 'id', 'N/A')}",
-            table_name="DigitizationRequest",
-            action_type="update",
-            ip_address=info.get("ip"),
-            user_agent=info.get("user_agent"),
-            user=user,
-        )
-        serializer = DigitizationSerializer(
-            digitization,
-            data=request.data,
-            partial=True,
-            context={
-                "request": request,
-                "digitization": digitization,
-            },
-        )
-
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-
-        return Response(serializer.data, status=200)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data, status=200)
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsLGAdmin])
 def lg_digitization_overview(request):
     """
     Provide an overview of digitization requests for the authenticated LG admin.
@@ -1348,54 +1285,155 @@ def lg_digitization_overview(request):
     """
 
     user = request.user
-    user_role = getattr(user.role, "name", "")
     current_month = now().month
     current_year = now().year
-
-    if user_role != "lg_admin":
-        return Response(
-            {"error": "User not permitted"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    admin_perm = AdminPermission.objects.filter(admin=user)
-    if not admin_perm:
-        return Response({"error": "User not permitted"}, status=403)
+    info = get_request_info(request)
 
     digitizations = DigitizationRequest.objects.filter(
-        local_government__in=admin_perm.values_list(
+        local_government__in=user.admin_permissions.all().values_list(
             "local_government", flat=True
         )
-    )
+    ).prefetch_related("payments")
 
-    monthly_counts = (
-        digitizations.annotate(month=TruncMonth("created_at"))
-        .values("month")
-        .annotate(count=Count("id"))
-        .order_by("month")
-    ).filter(
+    approved_monthly_counts = digitizations.filter(
         created_at__year=current_year,
         created_at__month=current_month,
         verification_status="approved",
-    )
+    ).count()
 
-    total_requests = digitizations.count()
     pending_requests = digitizations.filter(
         verification_status="pending"
     ).count()
 
-    rejected_requests = digitizations.filter(
-        verification_status="rejected"
-    ).count()
-
-    # revenue_generated = DigitizationPayment.objects.filter(local
+    revenue_generated = (
+        digitizations.filter(payments__payment_status="successful")
+        .aggregate(total_revenue=Sum("payments__amount"))
+        .get("total_revenue")
+        or 0
+    )
 
     data = {
-        "total_requests": total_requests,
-        "approved_requests_this_month": monthly_counts,
+        "approved_requests_this_month": approved_monthly_counts,
         "pending_requests": pending_requests,
-        "rejected_requests": rejected_requests,
-        "revenue_generated": 0,
+        "revenue_generated": revenue_generated,
     }
+    AuditLog.objects.create(
+        description=f"{user.email} viewed digitization overview",
+        table_name="DigitizationRequest",
+        action_type="view",
+        ip_address=info.get("ip"),
+        user_agent=info.get("user_agent"),
+        user=user,
+    )
 
     return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsLGAdmin])
+def lg_admin_dashboard(request):
+    """
+    Provide an overview of certificate applications and revenue
+    for the authenticated LG admin.
+    """
+    user = request.user
+    current_week = now() - timedelta(days=7)
+    previous_week = current_week - timedelta(days=7)
+    info = get_request_info(request)
+
+    applications = CertificateApplication.objects.filter(
+        local_government__in=user.admin_permissions.values_list(
+            "local_government", flat=True
+        )
+    ).prefetch_related("payments")
+
+    approved_qs = applications.filter(application_status="approved")
+    pending_qs = applications.filter(application_status="pending")
+
+    total_applications = applications.count()
+    approved_count = approved_qs.count()
+    pending_count = pending_qs.count()
+
+    approved_this_week = approved_qs.filter(
+        created_at__gte=current_week
+    ).count()
+    approved_last_week = approved_qs.filter(
+        created_at__lt=current_week,
+        created_at__gte=previous_week,
+    ).count()
+
+    approval_ratio = (
+        (approved_count / total_applications) * 100
+        if total_applications > 0
+        else 0
+    )
+
+    total_revenue = (
+        applications.filter(payment_status="paid")
+        .aggregate(total=Sum("payments__amount"))
+        .get("total")
+        or 0
+    )
+
+    revenue_this_week = (
+        applications.filter(
+            payment_status="paid", created_at__gte=current_week
+        )
+        .aggregate(total=Sum("payments__amount"))
+        .get("total")
+        or 0
+    )
+
+    revenue_last_week = (
+        applications.filter(
+            payment_status="paid",
+            created_at__lt=current_week,
+            created_at__gte=previous_week,
+        )
+        .aggregate(total=Sum("payments__amount"))
+        .get("total")
+        or 0
+    )
+
+    revenue_increase_percentage = (
+        ((revenue_this_week - revenue_last_week) / revenue_last_week) * 100
+        if revenue_last_week > 0
+        else (100 if revenue_this_week > 0 else 0)
+    )
+
+    data = {
+        "approved_applications": approved_count,
+        "approved_this_week": approved_this_week,
+        "approved_last_week": approved_last_week,
+        "pending_applications": pending_count,
+        "approval_ratio": approval_ratio,
+        "revenue_generated": total_revenue,
+        "revenue_this_week": revenue_this_week,
+        "revenue_last_week": revenue_last_week,
+        "revenue_increase_percentage": revenue_increase_percentage,
+        "total_applications": total_applications,
+    }
+
+    AuditLog.objects.create(
+        description=f"{user.email} viewed LG admin dashboard",
+        table_name="CertificateApplication",
+        action_type="view",
+        ip_address=info.get("ip"),
+        user_agent=info.get("user_agent"),
+        user=user,
+    )
+
+    return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+def health_check():
+    """
+        Health check endpoint to verify that the service is running.
+
+    Returns:
+            Response: A Response object with a success message and HTTP 200 status.
+    """
+    return Response(
+        {"status": "Service is running"}, status=status.HTTP_200_OK
+    )
