@@ -1,7 +1,11 @@
+import json
 from django.db import transaction
 from django.conf import settings
 from django.db.models import Sum
 from django.http import JsonResponse
+from django.utils.crypto import hashlib, hmac
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.decorators import (
@@ -1169,6 +1173,75 @@ def manage_all_applicants_application(request):
     )
 
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+@api_view(["POST"])
+def paystack_webhook(request):
+    """
+    Handle Paystack webhook events for payment verification.
+
+    This view processes POST requests from Paystack containing payment event data.
+    It verifies the payment status and updates the corresponding Payment or
+    DigitizationPayment records in the database.
+
+    Args:
+        request (HttpRequest): The HTTP request object containing Paystack event data.
+
+    Returns:
+        Response: A DRF Response object with a success or error message and appropriate HTTP status code.
+    """
+    payload = request.body
+    signature = request.META.get("HTTP_X_PAYSTACK_SIGNATURE", "")
+
+    secret = settings.PAYSTACK_SECRET_KEY.encode()
+    computed_signature = hmac.new(secret, payload, hashlib.sha512).hexdigest()
+
+    if not hmac.compare_digest(computed_signature, signature):
+        return Response(
+            {"error": "Invalid signature"}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    event = json.loads(payload)
+
+    if event.get("event") == "charge.success":
+        data = event.get("data", {})
+        reference = data.get("reference", "")
+        amount = data.get("amount", 0) / 100
+
+        payment = Payment.objects.filter(payment_reference=reference).first()
+        if payment and payment.amount == amount:
+            payment.is_verified = True
+            payment.save()
+            create_audit_log(
+                user=payment.user,
+                action_type="update",
+                table_name="Payment",
+                description=f"Payment {reference} verified successfully",
+            )
+            return Response(
+                {"message": "Payment verified successfully"},
+                status=status.HTTP_200_OK,
+            )
+
+        digitization_payment = DigitizationPayment.objects.filter(
+            payment_reference=reference
+        ).first()
+        if digitization_payment and digitization_payment.amount == amount:
+            digitization_payment.is_verified = True
+            digitization_payment.save()
+            create_audit_log(
+                user=digitization_payment.user,
+                action_type="update",
+                table_name="DigitizationPayment",
+                description=f"Digitization Payment {reference} verified successfully",
+            )
+            return Response(
+                {"message": "Digitization Payment verified successfully"},
+                status=status.HTTP_200_OK,
+            )
+
+    return Response({"message": "Event ignored"}, status=status.HTTP_200_OK)
 
 
 @api_view(["GET", "PATCH"])
