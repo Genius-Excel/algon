@@ -98,12 +98,12 @@ class CreateApplicationSerializer(serializers.Serializer):
     state = serializers.CharField(required=True)
     local_government = serializers.CharField(max_length=50, required=True)
     village = serializers.CharField(max_length=150, required=True)
-    letter_from_traditional_ruler = serializers.URLField()
-    profile_photo = serializers.URLField()
-    nin_slip = serializers.URLField()
+    # letter_from_traditional_ruler = serializers.URLField()
+    # profile_photo = serializers.URLField()
+    # nin_slip = serializers.URLField()
     nin = serializers.CharField()
-    residential_address = serializers.CharField(max_length=100)
-    landmark = serializers.CharField(max_length=50)
+    # residential_address = serializers.CharField(max_length=100)
+    # landmark = serializers.CharField(max_length=50)
 
     def validate_nin(self, value):
         if not validate_nin_number(value):
@@ -138,8 +138,6 @@ class CreateApplicationSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs) -> dict | None:
-        # validate if the lga requires some fields
-        # trad_ruler_letter = attrs.get("letter_from_traditional_ruler")
         local_govt_name = attrs.get("local_government")
         state_name = attrs.get("state")
         state = State.objects.filter(name__iexact=state_name).first()
@@ -153,18 +151,18 @@ class CreateApplicationSerializer(serializers.Serializer):
         if not local_govt:
             raise serializers.ValidationError("Local government not found")
         attrs.update({"local_government": local_govt})
-        dynamic_fields = LGDynamicField.objects.filter(
-            local_government=local_govt, is_required=True
-        )
-
-        for field in dynamic_fields:
-            if field.field_name not in attrs.get(field.field_name):
-                raise serializers.ValidationError(
-                    {
-                        field.field_name: f"{field.field_label} is "
-                        f"required for {local_govt_name}"
-                    }
-                )
+        # dynamic_fields = LGDynamicField.objects.filter(
+        #     local_government=local_govt, is_required=True
+        # )
+        #
+        # for field in dynamic_fields:
+        #     if field.field_name not in attrs.get(field.field_name):
+        #         raise serializers.ValidationError(
+        #             {
+        #                 field.field_name: f"{field.field_label} is "
+        #                 f"required for {local_govt_name}"
+        #             }
+        #         )
 
         return attrs
 

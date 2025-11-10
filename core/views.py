@@ -576,9 +576,9 @@ def change_password(request):
         )
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def create_certificate_application(request):
+@api_view(["POST", "PATCH"])
+@permission_classes([IsAuthenticated, IsApplicantUser])
+def create_certificate_application(request, step_number, application_id=None):
     """
     Create the local goverment Certificate for the applicant
 
@@ -590,43 +590,54 @@ def create_certificate_application(request):
     # confirm if user is an applicant, does not have an
     # existing approved certificate application request
     user = request.user
-    role = getattr(user.role, "name", "")
-    if role != "applicant":
-        return Response(
-            {"error": "User is not an applicant"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-    if CertificateApplication.objects.filter(
-        applicant=user, application_status="approved"
-    ).exists():
-        return Response(
-            {"error": "Approved application already exists"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    if DigitizationRequest.objects.filter(
-        applicant=user, verification_status="approved"
-    ).exists():
-        return Response(
-            {"error": "User already has an approved digitization request"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    serializer = CreateApplicationSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    else:
-        serializer.save(applicant=user)
-        create_audit_log(
-            user=user,
-            action_type="create",
-            table_name="CertificateApplication",
-            description=f"New certificate application initiated by {user.email}",
-        )
-        return Response(
-            {
-                "data": serializer.data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+    if request.method == "POST" and not step_number and not application_id:
+        if CertificateApplication.objects.filter(
+            applicant=user, application_status="approved"
+        ).exists():
+            return Response(
+                {"error": "Approved application already exists"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if DigitizationRequest.objects.filter(
+            applicant=user, verification_status="approved"
+        ).exists():
+            return Response(
+                {"error": "User already has an approved digitization request"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = CreateApplicationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors, status=status.HTTP_400_BAD_REQUEST
+            )
+        else:
+            serializer.save(applicant=user)
+            create_audit_log(
+                user=user,
+                action_type="create",
+                table_name="CertificateApplication",
+                description=f"New certificate application initiated by {user.email}",
+            )
+            # check if the lga has extra fields to be filled
+            extra_fields = LGDynamicField.objects.filter(
+                local_government=serializer.instance.local_government
+            )
+            return Response(
+                {
+                    "data": serializer.data,
+                    "extra_fields": [
+                        {
+                            "field_label": f.field_label,
+                            "field_name": f.field_name,
+                            "field_type": f.field_type,
+                            "is_required": f.is_required,
+                        }
+                        for f in extra_fields
+                    ],
+                    "application_id": str(serializer.instance.id),
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
 
 @api_view(["GET", "POST"])
@@ -742,61 +753,93 @@ def verify_certificate(request):
     )
 
 
-@api_view(["GET", "POST", "PUT"])
-@permission_classes([IsAuthenticated])
-def local_goverment_fees(request):
-    """Retrieve and set the application fee for applying for certification
-    Args:
-        request: The Request Object
-
-        returns:
-            GET - 200 if found or 404 if not found
-            POST:
-                201 (Created) - Fee found
-                403 (Forbidden) - User with lesser privileges attempts to modify data
-                400 (BAD Request) - Malformed data sent
-
-            PUT:
-                200 (OK) - modified
-
-        Returns:
-            Response
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsApplicantUser])
+def applicant_local_government_fee(request):
     """
+    Applicants can view the fee for a specific Local Government.
+    """
+    lga_name = request.query_params.get("lga")
+    lg_id = request.query_params.get("local_government_id")
 
+    if not lga_name and not lg_id:
+        return Response(
+            {"error": "Must provide 'lga' or 'local_government_id'"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if lg_id:
+        lg = LocalGovernment.objects.filter(id=lg_id).first()
+    else:
+        lg = LocalGovernment.objects.filter(
+            name__iexact=lga_name.strip()
+        ).first()
+
+    if not lg:
+        return Response({"error": "Local Government not found"}, status=404)
+
+    fee = LGFee.objects.filter(local_government=lg).first()
+    if not fee:
+        return Response(
+            {"error": "Fee not set for this Local Government"}, status=404
+        )
+
+    serializer = LGFeeSerializer(fee)
+    AuditLog.objects.create(
+        table_name="LGFee",
+        user=request.user,
+        action_type="view",
+        description=(
+            f"{request.user.email} viewed fee for {lg.name} "
+            f"({fee.application_fee} {fee.currency})"
+        ),
+    )
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "POST", "PUT"])
+@permission_classes([IsAuthenticated, IsLGAdmin])
+def lg_admin_local_government_fee(request, pk):
+    """
+    Local Government Admins can manage fees for their Local Government.
+    Args:
+        request (Request): The HTTP request object containing user data.
+    Returns:
+        Response: A Response object containing a success message and HTTP
+        status code 200 for GET and PUT requests, and 201 for POST requests.
+
+    """
     if request.method == "GET":
-        lga_name = request.query_params.get("lga")
-        lg_id = request.query_params.get("local_government_id")
-
-        if not lga_name and not lg_id:
-            return Response(
-                {"error": "Must provide 'lga' or 'local_government_id'"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+        lg_id = request.query_params.get("govt_id")
+        fees = LGFee.objects.all()
         if lg_id:
-            lg = LocalGovernment.objects.filter(id=lg_id).first()
-        else:
-            lg = LocalGovernment.objects.filter(
-                name__iexact=lga_name.strip()
-            ).first()
+            fees = fees.filter(local_government_id=lg_id)
 
-        if not lg:
-            return Response(
-                {"error": "Local Government not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        fee = LGFee.objects.filter(local_government=lg).first()
-        if not fee:
-            return Response(
-                {"error": "Fee not set for this Local Government"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        serializer = LGFeeSerializer(fee)
+        serializer = LGFeeSerializer(fees, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # TODO: add post requues for lg admin to update the pricing
+    elif request.method == "POST":
+        serializer = LGFeeSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == "PUT":
+        if not pk:
+            return Response(
+                {"error": "LOcal government ID is required for update"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        lg = get_object_or_404(LocalGovernment, id=pk)
+        fee_obj = LGFee.objects.filter(local_government=lg).first()
+        if not fee_obj:
+            return Response({"error": "Fee object not found"}, status=404)
+        serializer = LGFeeSerializer(fee_obj, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["POST"])
@@ -849,7 +892,7 @@ def upload_status(request, task_id) -> Response:
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsApplicantUser])
 def certificate_digitization(request):
     user = request.user
     # confirm if the user does not have an existing digitization request
