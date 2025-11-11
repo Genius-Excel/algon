@@ -1,4 +1,5 @@
 import random
+import httpx
 import string
 import mailtrap as mt
 from pathlib import Path
@@ -6,17 +7,13 @@ from jinja2 import Environment, FileSystemLoader
 from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
 from datetime import timedelta
-from decouple import config
 import cloudinary
 import cloudinary.uploader
-import cloudinary.api
-from rest_framework import serializers
-import base64
-import uuid
-from django.core.files.base import ContentFile
-from django.conf import settings
 from core.models import AuditLog
 from django.utils import timezone
+
+
+# from core.serializers import FileUploadSerializer
 
 
 def generate_username(length=10):
@@ -131,10 +128,13 @@ def upload_file_to_cloudinary(file_name, folder: str = "uploads"):
        Exception: If there is an error during the upload process.
     """
     try:
-        response = cloudinary.uploader.upload(file_name, folder=folder)
-        return response["secure_url"]
+        response = cloudinary.uploader.upload(file_name)
+        secure_url = response.get("secure_url")
+        if not secure_url:
+            raise Exception("No secure_url returned from Cloudinary")
+        return secure_url
     except Exception as e:
-        return f"Error while uploading file to Cloudinary: {e}"
+        raise Exception(f"Cloudinary upload failed: {str(e)}")
 
 
 def create_audit_log(
@@ -231,3 +231,113 @@ def generate_random_id(
 
     return generated_string
 
+
+def get_request_info(request) -> dict[str, str | None]:
+    """
+    Retrieve information about incoming request
+
+    Args:
+        Request: HTTPRequest
+
+    Returns
+        Dict with the IP and user agent
+    """
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    ip = (
+        x_forwarded_for.split(",")[0].strip()
+        if x_forwarded_for
+        else request.META.get("REMOTE_ADDR")
+    )
+    user_agent = request.META.get("HTTP_USER_AGENT", "")
+
+    return {"ip": ip or None, "user_agent": user_agent or None}
+
+
+# utils/permissions.py
+
+
+def get_user_role(user):
+    """
+    Returns the role name of the user.
+    """
+    return getattr(user.role, "name", None)
+
+
+# def handle_uploads(file, file_type, application_id=None):
+#     """
+#     Handles file uploads asynchronously via Celery.
+#
+#     Expects multipart/form-data with:
+#         - file: the uploaded file
+#         - file_type: the purpose (e.g., 'nin_slip', 'profile_photo')
+#
+#     Returns:
+#         {
+#             "task_id": "<celery_task_id>"
+#         }
+#     """
+#     if not file or not file_type:
+#         raise PermissionDenied("File and file_type are required.")
+#     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+#         for chunk in file.chunks():
+#             tmp_file.write(chunk)
+#         tmp_file_path = tmp_file.name
+#     task = cloudinary_upload_task.delay(
+#         tmp_file_path, file_type, application_id
+#     )
+#     return {"task_id": task.id}
+
+
+def extract_payment_data(data):
+    """extract payment data from request data"""
+    payment_data = {
+        "amount": data.get("amount"),
+        "reference": data.get("reference"),
+        "callback_url": data.get("callback_url"),
+    }
+
+    return payment_data
+
+
+def paystack_url_generate(
+    amount: int,
+    email: str,
+    reference: str,
+    callback_url: str,
+):
+    """Generate a paystack payment url"""
+    with httpx.Client() as client:
+        url = "https://api.paystack.co/transaction/initialize"
+        headers = {
+            "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
+            "Content-Type": "application/json",
+        }
+        amount = int(float(amount))
+        payload = {
+            "amount": amount * 100,
+            "email": email,
+            "reference": reference,
+            "callback_url": callback_url,
+        }
+        response = client.post(url, headers=headers, json=payload)
+
+        return response
+
+
+def extract_upload_file_data(request, files_needed: list[str], instance):
+    """
+    view to extract and send to cloudinary, the files attached in a request
+    """
+    from core.tasks import cloudinary_upload_task
+
+    files = request.FILES
+    [
+        cloudinary_upload_task.delay(
+            files.get(file).read(),
+            file,
+            str(instance.id),
+            instance.__class__.__name__,
+        )
+        for file in files_needed
+        if files.get(file)
+    ]

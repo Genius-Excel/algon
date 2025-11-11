@@ -1,14 +1,18 @@
-from django.core.serializers.base import SerializationError
+from django.utils import timezone
 from rest_framework import serializers
 
 from core.models import (
+    ApplicationFieldResponse,
     CertificateApplication,
+    DigitizationPayment,
     DigitizationRequest,
     LGDynamicField,
     LGFee,
     LocalGovernment,
+    Payment,
     State,
 )
+from core.utils import validate_nin_number
 
 
 class UserRegistrationSerializer(serializers.Serializer):
@@ -91,17 +95,23 @@ class CreateApplicationSerializer(serializers.Serializer):
         },
         required=True,
     )
-    email_address = serializers.EmailField(required=True)
+    email = serializers.EmailField(required=True)
     state = serializers.CharField(required=True)
-    lga = serializers.CharField(max_length=50, required=True)
+    local_government = serializers.CharField(max_length=50, required=True)
     village = serializers.CharField(max_length=150, required=True)
-    letter_from_traditional_ruler = serializers.URLField()
-    profile_photo = serializers.URLField()
-    nin_slip = serializers.URLField()
-    address = serializers.CharField(max_length=100)
-    landmark = serializers.CharField(max_length=50)
+    # letter_from_traditional_ruler = serializers.URLField()
+    # profile_photo = serializers.URLField()
+    # nin_slip = serializers.URLField()
+    nin = serializers.CharField()
+    # residential_address = serializers.CharField(max_length=100)
+    # landmark = serializers.CharField(max_length=50)
 
-    def validate_lga(self, value) -> str | None:
+    def validate_nin(self, value):
+        if not validate_nin_number(value):
+            raise serializers.ValidationError("NIN not valid")
+        return value
+
+    def validate_local_government(self, value) -> str | None:
         """validate that the local government is in the DB"""
         if LocalGovernment.objects.filter(name__iexact=value.strip()).exists():
             return value
@@ -129,30 +139,19 @@ class CreateApplicationSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs) -> dict | None:
-        # validate if the lga requires some fields
-        # trad_ruler_letter = attrs.get("letter_from_traditional_ruler")
-        local_govt_name = attrs.get("lga")
+        local_govt_name = attrs.get("local_government")
         state_name = attrs.get("state")
+        state = State.objects.filter(name__iexact=state_name).first()
+        if not state:
+            raise serializers.ValidationError("State not found")
+        attrs.update({"state": state})
         local_govt = LocalGovernment.objects.filter(
             name=local_govt_name.strip(),
-            state__name__iexact=state_name.strip(),
+            state=state,
         ).first()
         if not local_govt:
             raise serializers.ValidationError("Local government not found")
-
-        dynamic_fields = LGDynamicField.objects.filter(
-            local_government=local_govt, is_required=True
-        )
-
-        for field in dynamic_fields:
-            if field.field_name not in attrs.get(field.field_name):
-                raise serializers.ValidationError(
-                    {
-                        field.field_name: f"{field.field_label} is "
-                        f"required for {local_govt_name}"
-                    }
-                )
-
+        attrs.update({"local_government": local_govt})
         return attrs
 
     def create(self, validated_data):
@@ -160,14 +159,24 @@ class CreateApplicationSerializer(serializers.Serializer):
 
 
 class LGDynamicFieldSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = LGDynamicField
         fields = "__all__"
 
 
-class LGFeeSerializer(serializers.ModelSerializer):
+class PaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payment
+        fields = "__all__"
 
+
+class DigitizationPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DigitizationPayment
+        fields = "__all__"
+
+
+class LGFeeSerializer(serializers.ModelSerializer):
     class Meta:
         model = LGFee
         fields = "__all__"
@@ -199,7 +208,6 @@ class LGFeeSerializer(serializers.ModelSerializer):
 
 
 class AdditionalRequirementSerializer(serializers.Serializer):
-
     class Meta:
         model = LGDynamicField
 
@@ -207,22 +215,163 @@ class AdditionalRequirementSerializer(serializers.Serializer):
 class DigitizationRequestSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(required=True)
     phone_number = serializers.CharField(max_length=15, required=True)
-    nin_slip = serializers.URLField(required=True)
-    profile_photo = serializers.URLField(required=True)
     state = serializers.CharField(required=True)
     local_government = serializers.CharField(required=True)
     certificate_reference_number = serializers.CharField(required=True)
-    uploaded_certificate = serializers.CharField(required=True)
 
     def validate_state(self, value):
         """validate the provided state"""
-        if State.objects.filter(name__iexact=value.strip()).exists():
-            return value
+        state = State.objects.filter(name__iexact=value.strip()).first()
+        if state:
+            return state
         raise serializers.ValidationError(
             "State matching query does not exist"
         )
 
+    def validate(self, attrs):
+        local_government = attrs.get("local_government", "")
+        state = attrs.get("state")
+        lg_instance = LocalGovernment.objects.filter(
+            name__iexact=local_government.strip(), state=state
+        ).first()
+        attrs.update({"local_government": lg_instance})
+        return attrs
+
     class Meta:
         # fields = "__all__"
-        exclude = ("applicant",)
+        exclude = (
+            "applicant",
+            "nin_slip",
+            "profile_photo",
+            "uploaded_certificate",
+        )
         model = DigitizationRequest
+
+
+class ApplicationFieldResponseSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        fields = "__all__"
+        model = ApplicationFieldResponse
+
+
+class CreateApplicationStep2Serializer(serializers.Serializer):
+    pass
+
+
+class ApplicationSerializer(serializers.ModelSerializer):
+    action = serializers.ChoiceField(
+        choices=["approved", "rejected"], write_only=True
+    )
+
+    class Meta:
+        fields = "__all__"
+        model = CertificateApplication
+
+    def update(self, instance, validated_data):
+        action = validated_data.pop("action", None)
+        request = self.context.get("request")
+        if not request:
+            return
+        if action == "approved":
+            if instance.application_status == action:
+                raise serializers.ValidationError(
+                    f"Application already {action}"
+                )
+            # cross check that there is a paid payment entry for this application
+            instance_payments = instance.payments.filter(
+                payment_status="paid"
+            ).exists()
+            if (
+                action == "approved"
+                and instance.payment_status != "paid"
+                and not instance_payments
+            ):
+                raise serializers.ValidationError(
+                    "Certificate Application request has not been paid for"
+                )
+            instance.application_status = action
+            instance.approved_at = timezone.now()
+            instance.approved_by = request.user
+        elif action == "rejected":
+            if instance.application_status == action:
+                raise serializers.ValidationError(
+                    f"Application already {action}"
+                )
+            instance.application_status = action
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if instance.approved_by:
+            representation["approved_by"] = {
+                "id": instance.approved_by.id,
+                "email": instance.approved_by.email,
+            }
+        if instance.local_government:
+            representation["local_government"] = {
+                "id": instance.local_government.id,
+                "name": instance.local_government.name,
+            }
+        if instance.state:
+            representation["state"] = {
+                "id": instance.local_government.state.id or "",
+                "name": instance.local_government.state.name or "",
+            }
+        return representation
+
+
+class DigitizationSerializer(serializers.ModelSerializer):
+    action = serializers.ChoiceField(
+        choices=["pending", "under_review", "approved", "rejected"],
+        write_only=True,
+    )
+
+    class Meta:
+        fields = "__all__"
+        model = DigitizationRequest
+
+    def update(self, instance, validated_data):
+        action = validated_data.pop("action", None)
+        request = self.context.get("request")
+        if not request:
+            return
+        if action:
+            if instance.verification_status == action:
+                raise serializers.ValidationError(
+                    f"Digitization request already {action}"
+                )
+            # cross check that there is a paid payment entry for this digitization
+            # makred as paid still needs to be cross checked with payment entries
+            digitization_payments = instance.payments.filter(
+                payment_status="paid"
+            ).exists()
+            if (
+                action == "approved"
+                and instance.payment_status != "paid"
+                and not digitization_payments
+            ):
+                raise serializers.ValidationError(
+                    "Digitization request has not been paid for"
+                )
+            instance.verification_status = action
+            if action == "approved":
+                instance.approved_by = request.user
+                instance.approved_at = timezone.now()
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if instance.local_government:
+            representation["local_government"] = {
+                "id": instance.local_government.id,
+                "name": instance.local_government.name,
+            }
+        if instance.state:
+            representation["state"] = {
+                "id": instance.local_government.state.id or "",
+                "name": instance.local_government.state.name or "",
+            }
+        return representation

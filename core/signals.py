@@ -1,6 +1,15 @@
+from datetime import timedelta
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import Payment, DigitizationPayment, Transaction
+
+from core.utils import generate_random_id
+from .models import (
+    DigitizationCertificate,
+    DigitizationRequest,
+    Payment,
+    DigitizationPayment,
+    Transaction,
+)
 
 
 @receiver(post_save, sender=DigitizationPayment)
@@ -34,4 +43,20 @@ def post_application_payment(sender, instance, created, **kwargs):
             user=created.user,
             transaction_title=f"Certificate application "
             f"payment for {created.user.email}",
+        )
+
+
+@receiver(post_save, sender=DigitizationRequest)
+def issue_digitization_certificate(sender, instance, created, **kwargs):
+    if (
+        instance.verification_status == "approved"
+        and instance.payment_status == "paid"
+    ):
+        # Logic to issue digitized certificate
+        DigitizationCertificate.objects.create(
+            digitization_request=instance,
+            approved_by=instance.approved_by,
+            issue_date=instance.approval_date,
+            expiry_date=timedelta(days=7),
+            verification_code=generate_random_id(),
         )
