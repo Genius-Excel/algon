@@ -670,6 +670,10 @@ def certificate_application_second_step(request, application_id):
     Returns:
         Response: A DRF Response object with a success or error message and appropriate HTTP status code.
     """
+    # reject if data is not in multipart/form-data
+    content_type = request.content_type.split(";")[0].strip()
+    if content_type not in ["form-data", "multipart/form-data"]:
+        return Response({"error": "Invalid content type"}, status=400)
 
     if not application_id:
         return Response(
@@ -693,56 +697,92 @@ def certificate_application_second_step(request, application_id):
             status=status.HTTP_404_NOT_FOUND,
         )
     extra_fields = request.data.get("extra_fields", {})
-    # application_field = LGDynamicField.objects.filter(
-    #     local_government=instance.local_government,
-    # )
-    for field_data in extra_fields:
-        field_id = field_data.get("field_id", None)
-        lg_field = LGDynamicField.objects.filter(id=field_id).first()
-        if not lg_field:
-            continue
-        field_data["field"] = lg_field.id
-        field_data["application"] = application_instance.id
+    local_government_fee = LGFee.objects.filter(
+        local_government=application_instance.local_government
+    ).first()
 
-        serializer = ApplicationFieldResponseSerializer(
-            data=field_data,
+    application_field = LGDynamicField.objects.filter(
+        local_government=application_instance.local_government,
+    )
+    if application_field.exists() and not extra_fields:
+        return Response(
+            {"error": "Extra fields are required for this local government"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-        response_instance = serializer.validated_data.get("id")
-        if not serializer.is_valid():
-            return Response(
-                serializer.errors, status=status.HTTP_400_BAD_REQUEST
-            )
-        # get the field_type
-        field_type = getattr(lg_field, "field_type", None)
-        if field_type == "file":
-            uploaded_file = request.FILES.get(lg_field.field_label)
-            if uploaded_file:
+
+    if extra_fields and application_field.exists():
+        approved_field_names = set(
+            application_field.values_list("field_label", flat=True)
+        )
+        parsed_json_fields = json.loads(extra_fields)
+
+        for field_data in parsed_json_fields:
+            field_name = field_data.get("field_name")
+            field_id = field_data.get("field_id")
+
+            if field_name not in approved_field_names:
+                return Response(
+                    {"error": f"Invalid field name: {field_name}"}, status=400
+                )
+
+            lg_field = LGDynamicField.objects.filter(id=field_id).first()
+            if not lg_field:
+                continue
+
+            field_type = getattr(lg_field, "field_type", None)
+
+            field_data["field"] = lg_field.id
+            field_data["application"] = application_instance.id
+
+            if field_type == "file":
+                uploaded_file = request.FILES.get(field_name)
+                if not uploaded_file:
+                    continue
+
+                field_data["field_value"] = uploaded_file.name
+
+                serializer = ApplicationFieldResponseSerializer(
+                    data=field_data
+                )
+                if not serializer.is_valid():
+                    return Response(
+                        serializer.errors, status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                instance = serializer.save()
+
+                # Upload asynchronously (e.g., Cloudinary)
                 cloudinary_upload_task.delay(
                     file_bytes=uploaded_file.read(),
                     file_type="field_value",
-                    application_id=str(response_instance),
+                    application_id=str(instance.id),
                     model="ApplicationFieldResponse",
                 )
+
             else:
-                continue
-        serializer.save()
+                serializer = ApplicationFieldResponseSerializer(
+                    data=field_data
+                )
+                if not serializer.is_valid():
+                    return Response(
+                        serializer.errors, status=status.HTTP_400_BAD_REQUEST
+                    )
 
-        create_audit_log(
-            user=user,
-            action_type="update",
-            table_name="CertificateApplication",
-            description=f"Certificate application updated by {user.email}",
-        )
-        # get the amount charged for the application by the local government
-        local_government_fee = LGFee.objects.filter(
-            local_government=application_instance.local_government
-        ).first()
+                serializer.save()
 
-        serialized_fee = LGFeeSerializer(local_government_fee)
-        return Response(
-            {"data": serializer.data, "fee": serialized_fee},
-            status=status.HTTP_200_OK,
-        )
+            create_audit_log(
+                user=user,
+                action_type="update",
+                table_name="CertificateApplication",
+                description=f"Certificate application updated by {user.email}",
+            )
+            # get the amount charged for the application by the local government
+
+    serialized_fee = LGFeeSerializer(local_government_fee)
+    return Response(
+        {"fee": serialized_fee.data},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["POST"])

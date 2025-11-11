@@ -19,6 +19,11 @@ urlpatterns = [
         name="certificate apply",
     ),
     path(
+        "certificates/applications/<str:application_id>",
+        views.certificate_application_second_step,
+        name="certificate apply step two",
+    ),
+    path(
         "application-fees/local-government",
         views.lg_admin_local_government_fee,
         name="local govt application fee",
@@ -53,6 +58,7 @@ urlpatterns = [
         views.lg_digitization_overview,
         name="lg digitization overview",
     ),
+    path("", views.paystack_webhook, name="payment webhook"),
     path(
         "admin/create-response-field",
         views.create_dynamic_response_field,
