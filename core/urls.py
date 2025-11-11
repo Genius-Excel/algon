@@ -14,12 +14,12 @@ urlpatterns = [
         name="verify_certificate",
     ),
     path(
-        "certificates/applications",
+        "certificates/applications/apply",
         views.applicant_certificate_application,
         name="certificate apply",
     ),
     path(
-        "certificates/applications/<str:application_id>",
+        "certificates/applications/apply/<str:application_id>",
         views.certificate_application_second_step,
         name="certificate apply step two",
     ),
@@ -29,9 +29,9 @@ urlpatterns = [
         name="local govt application fee",
     ),
     path(
-        "certificate/digitization",
-        views.certificate_digitization,
-        name="certificate digitization",
+        "certificate/digitizations/apply",
+        views.applicant_digitization_application,
+        name="applicant certificate digitization",
     ),
     path(
         "certificates/my-applications",
@@ -58,7 +58,7 @@ urlpatterns = [
         views.lg_digitization_overview,
         name="lg digitization overview",
     ),
-    path("", views.paystack_webhook, name="payment webhook"),
+    path("payment/webhook", views.paystack_webhook, name="payment webhook"),
     path(
         "admin/create-response-field",
         views.create_dynamic_response_field,

@@ -1,7 +1,6 @@
 import random
 import httpx
 import string
-import tempfile
 import mailtrap as mt
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
@@ -10,11 +9,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from datetime import timedelta
 import cloudinary
 import cloudinary.uploader
-from django.conf import settings
 from core.models import AuditLog
 from django.utils import timezone
 
-from django.core.exceptions import PermissionDenied
 
 # from core.serializers import FileUploadSerializer
 
@@ -325,3 +322,22 @@ def paystack_url_generate(
         response = client.post(url, headers=headers, json=payload)
 
         return response
+
+
+def extract_upload_file_data(request, files_needed: list[str], instance):
+    """
+    view to extract and send to cloudinary, the files attached in a request
+    """
+    from core.tasks import cloudinary_upload_task
+
+    files = request.FILES
+    [
+        cloudinary_upload_task.delay(
+            files.get(file).read(),
+            file,
+            str(instance.id),
+            instance.__class__.__name__,
+        )
+        for file in files_needed
+        if files.get(file)
+    ]

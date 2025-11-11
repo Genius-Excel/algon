@@ -46,6 +46,7 @@ from .models import (
 )
 from .utils import (
     extract_payment_data,
+    extract_upload_file_data,
     generate_random_id,
     generate_username,
     create_audit_log,
@@ -608,23 +609,15 @@ def applicant_certificate_application(request):
     instance = serializer.save(applicant=user)
 
     # Handle file uploads asynchronously via Celery
-    uploaded_file = request.FILES.get("nin_slip")
-    profile_photo = request.FILES.get("profile_photo")
+    files_needed = ["nin_slip", "profile_photo"]
+    missing_files = [f for f in files_needed if f not in request.FILES]
+    if missing_files:
+        return Response(
+            {"error": f"Missing required files: {', '.join(missing_files)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-    if uploaded_file:
-        cloudinary_upload_task.delay(
-            uploaded_file.read(),
-            "nin_slip",
-            str(instance.id),
-            "CertificateApplication",
-        )
-    if profile_photo:
-        cloudinary_upload_task.delay(
-            profile_photo.read(),
-            "profile_photo",
-            str(instance.id),
-            "CertificateApplication",
-        )
+    extract_upload_file_data(request, files_needed, instance)
 
     # Extra LG-specific fields
     extra_fields = LGDynamicField.objects.filter(
@@ -635,7 +628,7 @@ def applicant_certificate_application(request):
         user=user,
         action_type="create",
         table_name="CertificateApplication",
-        description=f"Certificate application step {step_number or 1} initiated by {user.email}",
+        description=f"Certificate application initiated by {user.email}",
     )
 
     return Response(
@@ -751,7 +744,6 @@ def certificate_application_second_step(request, application_id):
 
                 instance = serializer.save()
 
-                # Upload asynchronously (e.g., Cloudinary)
                 cloudinary_upload_task.delay(
                     file_bytes=uploaded_file.read(),
                     file_type="field_value",
@@ -776,7 +768,6 @@ def certificate_application_second_step(request, application_id):
                 table_name="CertificateApplication",
                 description=f"Certificate application updated by {user.email}",
             )
-            # get the amount charged for the application by the local government
 
     serialized_fee = LGFeeSerializer(local_government_fee)
     return Response(
@@ -915,34 +906,6 @@ def lg_admin_local_government_fee(request, pk):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated, IsApplicantUser])
-def certificate_digitization(request):
-    user = request.user
-    # confirm if the user does not have an existing digitization request
-    if DigitizationRequest.objects.filter(
-        applicant=user, verification_status="approved"
-    ).exists():
-        return Response(
-            {"error": "User already has an approved digitization request"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    if CertificateApplication.objects.filter(
-        applicant=user, application_status="approved"
-    ).exists():
-        return Response(
-            {"error": "Approved application already exists"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    serializer = DigitizationRequestSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    serializer.save(applicant=user)
-    create_audit_log(
-        user=user, action_type="create", table_name="DigitizationRequest"
-    )
-    return Response({"data": serializer.data}, status=status.HTTP_201_CREATED)
 
 
 @api_view(["POST"])
@@ -1231,6 +1194,7 @@ def paystack_webhook(request):
     Returns:
         Response: A DRF Response object with a success or error message and appropriate HTTP status code.
     """
+
     payload = request.body
     signature = request.META.get("HTTP_X_PAYSTACK_SIGNATURE", "")
 
@@ -1345,13 +1309,12 @@ def manage_single_applicants_application(request, application_id):
                     status=status.HTTP_403_FORBIDDEN,
                 )
             serializer = ApplicationSerializer(application)
-            AuditLog.objects.create(
+            create_audit_log(
                 description=f"{user.email} viewed {application_type} {application.id}",
                 table_name="CertificateApplication",
                 action_type=action_type,
-                ip_address=info.get("ip"),
-                user_agent=info.get("user_agent"),
                 user=user,
+                request=request,
             )
             return Response(serializer.data, status=200)
 
@@ -1370,13 +1333,12 @@ def manage_single_applicants_application(request, application_id):
                     status=status.HTTP_403_FORBIDDEN,
                 )
             serializer = DigitizationSerializer(application)
-            AuditLog.objects.create(
+            create_audit_log(
                 description=f"{user.email} viewed {application_type} {application.id}",
                 table_name="CertificateApplication",
                 action_type=action_type,
-                ip_address=info.get("ip"),
-                user_agent=info.get("user_agent"),
                 user=user,
+                request=request,
             )
             return Response(serializer.data, status=200)
 
@@ -1617,6 +1579,66 @@ def lg_admin_dashboard(request):
     )
 
     return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsApplicantUser])
+def applicant_digitization_application(request):
+    """ """
+    user = request.user
+    data = request.data
+    content_type = request.content_type.split(";")[0].strip()
+    if content_type not in ["form-data", "multipart/form-data"]:
+        return Response(
+            {
+                "error": "Invalid content type - Allowed content type (multipart/form-data"
+            },
+            status=400,
+        )
+    if DigitizationRequest.objects.filter(
+        applicant=user, verification_status="approved"
+    ).exists():
+        return Response(
+            {"error": "User already has an approved digitization request"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if CertificateApplication.objects.filter(
+        applicant=user, application_status="approved"
+    ).exists():
+        return Response(
+            {"error": "Approved application already exists"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    files_needed = ["nin_slip", "profile_photo", "uploaded_certificate"]
+
+    serializer = DigitizationRequestSerializer(data=data)
+    serializer.is_valid(raise_exception=True)
+
+    instance = serializer.save(applicant=user)
+
+    # handle file uploads
+    missing_files = [f for f in files_needed if f not in request.FILES]
+    if missing_files:
+        return Response(
+            {"error": f"Missing required files: {', '.join(missing_files)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    extract_upload_file_data(request, files_needed, instance)
+    create_audit_log(
+        user=user,
+        action_type="create",
+        table_name="DigitizationRequest",
+        description=f"Digitization application initiated by {user.email}",
+    )
+    # retrieve the attached price for digitization
+    fee = LGFee.objects.filter(
+        local_government=instance.local_government
+    ).first()
+    serialized_fee = LGFeeSerializer(fee)
+    return Response(
+        {"data": serializer.data, "fee": serialized_fee.data}, status=200
+    )
 
 
 @api_view(["GET"])

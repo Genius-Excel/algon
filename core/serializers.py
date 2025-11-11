@@ -215,24 +215,36 @@ class AdditionalRequirementSerializer(serializers.Serializer):
 class DigitizationRequestSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(required=True)
     phone_number = serializers.CharField(max_length=15, required=True)
-    nin_slip = serializers.URLField(required=True)
-    profile_photo = serializers.URLField(required=True)
     state = serializers.CharField(required=True)
     local_government = serializers.CharField(required=True)
     certificate_reference_number = serializers.CharField(required=True)
-    uploaded_certificate = serializers.CharField(required=True)
 
     def validate_state(self, value):
         """validate the provided state"""
-        if State.objects.filter(name__iexact=value.strip()).exists():
-            return value
+        state = State.objects.filter(name__iexact=value.strip()).first()
+        if state:
+            return state
         raise serializers.ValidationError(
             "State matching query does not exist"
         )
 
+    def validate(self, attrs):
+        local_government = attrs.get("local_government", "")
+        state = attrs.get("state")
+        lg_instance = LocalGovernment.objects.filter(
+            name__iexact=local_government.strip(), state=state
+        ).first()
+        attrs.update({"local_government": lg_instance})
+        return attrs
+
     class Meta:
         # fields = "__all__"
-        exclude = ("applicant",)
+        exclude = (
+            "applicant",
+            "nin_slip",
+            "profile_photo",
+            "uploaded_certificate",
+        )
         model = DigitizationRequest
 
 
