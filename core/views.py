@@ -607,7 +607,9 @@ def applicant_certificate_application(request):
         data=request.data, context={"request": request}
     )
     if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     instance = serializer.save(applicant=user)
 
@@ -779,7 +781,7 @@ def certificate_application_second_step(request, application_id):
     return Response(
         {
             "message": "Additional requirements successfully updated",
-            "data": {"fee": serialized_fee.data},
+            "data": serialized_fee.data,
         },
         status=status.HTTP_200_OK,
     )
@@ -922,7 +924,9 @@ def lg_admin_local_government_fee(request, pk=None):
                 },
                 status=status.HTTP_201_CREATED,
             )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     elif request.method == "PUT":
         if not pk:
