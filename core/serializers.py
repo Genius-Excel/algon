@@ -1,5 +1,6 @@
 from django.utils import timezone
 from rest_framework import serializers
+from django.db.models import Count
 
 from core.models import (
     ApplicationFieldResponse,
@@ -375,3 +376,40 @@ class DigitizationSerializer(serializers.ModelSerializer):
                 "name": instance.local_government.state.name or "",
             }
         return representation
+
+
+class SuperAdminLocalGovernmentSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = LocalGovernment
+        fields = "__all__"
+
+    def to_representation(self, instance):
+        instance_representation = super().to_representation(instance)
+        admin = instance.admin_permissions.first()
+        if admin:
+            instance_representation["asigned_admin"] = {
+                "id": admin.admin.id,
+                "name": admin.admin.get_full_name(),
+                "email": admin.admin.email,
+            }
+        instance_representation["state"] = {
+            "name": instance.state.name,
+            "id": instance.state.id,
+        }
+        certificates = (
+            instance.certificates.all()
+            .values("application_status")
+            .annotate(total=Count("id"))
+        )
+
+        instance_representation["certificates"] = certificates
+
+        return instance_representation
+
+
+class StateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = State
+        fields = "__all__"

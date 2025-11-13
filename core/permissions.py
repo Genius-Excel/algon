@@ -32,15 +32,10 @@ class IsLGAdmin(BasePermission):
     def has_object_permission(self, request, view, obj):
         # check if the user can approve requests for their local government
         # try to query based on local governemt
-        lg = getattr(obj.local_government, "name", "")
-        return (
-            obj
-            if lg
-            else obj.local_government
-            in request.user.admin_permissions.values_list(
-                "local_government", flat=True
-            )
+        my_lg = request.user.admin_permissions.values_list(
+            "local_government", flat=True
         )
+        return obj.local_government.id in my_lg
 
 
 class CanViewAndApproveRequests(BasePermission):
@@ -48,10 +43,10 @@ class CanViewAndApproveRequests(BasePermission):
     Custom permission class to allow only users with approval rights to approve requests.
     """
 
-    def has_permission(self, request, view) -> bool:
-        # Check if the user has the 'lg_admin' or 'super_admin' role
-        role = get_user_role(request.user)
-        return role in ["lg_admin", "super_admin"]
+    # def has_permission(self, request, view) -> bool:
+    #     # Check if the user has the 'lg_admin' or 'super_admin' role
+    #     role = get_user_role(request.user)
+    #     return role in ["lg_admin", "super_admin"]
 
     def has_object_permission(self, request, view, obj) -> bool:
         # Additional object-level permission checks can be added here
@@ -77,3 +72,10 @@ class CanExportCSV(BasePermission):
         return request.user.admin_permissions.filter(
             local_government=obj.local_government, can_export=True
         ).exists()
+
+
+class IsSuperAdminUser(BasePermission):
+
+    def has_permission(self, request, view):
+        role = get_user_role(request.user)
+        return role == "super_admin"

@@ -29,6 +29,11 @@ urlpatterns = [
         name="local govt application fee",
     ),
     path(
+        "application-fees/local-government/<str:pk>",
+        views.lg_admin_local_government_fee,
+        name="local govt application fee",
+    ),
+    path(
         "certificate/digitizations/apply",
         views.applicant_digitization_application,
         name="applicant certificate digitization",
@@ -68,5 +73,20 @@ urlpatterns = [
         "certificate/initiate-payment",
         views.initiate_payment,
         name="initiate payment",
+    ),
+    path(
+        "admin/export-csv",
+        views.lg_admin_export_csv,
+        name="LG admin csv export",
+    ),
+    path(
+        "admin/super/local-governments",
+        views.manage_local_governments,
+        name="Manage local government data",
+    ),
+    path(
+        "all-states",
+        views.retrieve_all_states_and_lg,
+        name="Retrive all states and associated local governments",
     ),
 ]

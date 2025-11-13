@@ -11,9 +11,9 @@ import cloudinary
 import cloudinary.uploader
 from core.models import AuditLog
 from django.utils import timezone
+from django.contrib.auth import get_user_model
 
-
-# from core.serializers import FileUploadSerializer
+User = get_user_model()
 
 
 def generate_username(length=10):

@@ -278,7 +278,10 @@ class CertificateApplication(models.Model):
     email = models.EmailField(blank=True, null=True)
     state = models.ForeignKey(State, on_delete=models.SET_NULL, null=True)
     local_government = models.ForeignKey(
-        LocalGovernment, on_delete=models.SET_NULL, null=True
+        LocalGovernment,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="certificates",
     )
     village = models.CharField(max_length=150, blank=True, null=True)
     residential_address = models.TextField(blank=True, null=True)

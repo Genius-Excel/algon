@@ -1,4 +1,6 @@
 import json
+from django.http import HttpResponse
+import csv
 from django.db import transaction
 from django.conf import settings
 from django.db.models import Sum
@@ -13,8 +15,7 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
-from rest_framework.views import PermissionDenied
-from celery.result import AsyncResult
+from django.core.exceptions import PermissionDenied
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.core.validators import validate_email
@@ -30,10 +31,10 @@ from core.permissions import (
     CanViewAndApproveRequests,
     IsApplicantUser,
     IsLGAdmin,
+    IsSuperAdminUser,
 )
 from core.tasks import cloudinary_upload_task
 from .models import (
-    AuditLog,
     Certificate,
     CertificateApplication,
     DigitizationPayment,
@@ -43,6 +44,7 @@ from .models import (
     LocalGovernment,
     Payment,
     Role,
+    State,
 )
 from .utils import (
     extract_payment_data,
@@ -50,11 +52,11 @@ from .utils import (
     generate_random_id,
     generate_username,
     create_audit_log,
-    get_request_info,
     paystack_url_generate,
     validate_nin_number,
     generate_email_confirmation_token,
     send_email_with_html_template,
+    generate_report,
 )
 from .serializers import (
     ApplicationFieldResponseSerializer,
@@ -66,15 +68,17 @@ from .serializers import (
     LGFeeSerializer,
     PaymentSerializer,
     UserRegistrationSerializer,
+    StateSerializer,
     UserLoginSerializer,
     UserLogoutSerializer,
     ChangePasswordSerializer,
     CreateApplicationSerializer,
+    SuperAdminLocalGovernmentSerializer,
 )
 
 from .throttles import ResetEmailTwoCallsPerHour
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 
 
 User = get_user_model()
@@ -633,18 +637,21 @@ def applicant_certificate_application(request):
 
     return Response(
         {
-            "data": serializer.data,
-            "extra_fields": [
-                {
-                    "field_label": f.field_label,
-                    "field_name": f.field_name,
-                    "field_type": f.field_type,
-                    "is_required": f.is_required,
-                    "field_id": str(f.id),
-                }
-                for f in extra_fields
-            ],
-            "application_id": str(instance.id),
+            "message": "Application saved successfully",
+            "data": {
+                "data": serializer.data,
+                "extra_fields": [
+                    {
+                        "field_label": f.field_label,
+                        "field_name": f.field_name,
+                        "field_type": f.field_type,
+                        "is_required": f.is_required,
+                        "field_id": str(f.id),
+                    }
+                    for f in extra_fields
+                ],
+                "application_id": str(instance.id),
+            },
         },
         status=status.HTTP_201_CREATED,
     )
@@ -771,7 +778,10 @@ def certificate_application_second_step(request, application_id):
 
     serialized_fee = LGFeeSerializer(local_government_fee)
     return Response(
-        {"fee": serialized_fee.data},
+        {
+            "message": "Additional requirements successfully updated",
+            "data": {"fee": serialized_fee.data},
+        },
         status=status.HTTP_200_OK,
     )
 
@@ -810,12 +820,16 @@ def verify_certificate(request):
     )
     return Response(
         {
-            "status": certificate.application.application_status,
-            "certificate_number": certificate.certificate_number,
-            "cerfiticate_type": certificate.certificate_type,
-            "expiry_date": certificate.expiry_date,
-            "verification_code": certificate.verification_code,
-        }
+            "message": "Certificate successfully verified",
+            "data": {
+                "status": certificate.application.application_status,
+                "certificate_number": certificate.certificate_number,
+                "cerfiticate_type": certificate.certificate_type,
+                "expiry_date": certificate.expiry_date,
+                "verification_code": certificate.verification_code,
+            },
+        },
+        status=status.HTTP_200_OK,
     )
 
 
@@ -851,7 +865,7 @@ def applicant_local_government_fee(request):
         )
 
     serializer = LGFeeSerializer(fee)
-    AuditLog.objects.create(
+    create_audit_log(
         table_name="LGFee",
         user=request.user,
         action_type="view",
@@ -859,13 +873,17 @@ def applicant_local_government_fee(request):
             f"{request.user.email} viewed fee for {lg.name} "
             f"({fee.application_fee} {fee.currency})"
         ),
+        request=request,
     )
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    return Response(
+        {"message": "Fee successfully retrieved", "data": serializer.data},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET", "POST", "PUT"])
 @permission_classes([IsAuthenticated, IsLGAdmin])
-def lg_admin_local_government_fee(request, pk):
+def lg_admin_local_government_fee(request, pk=None):
     """
     Local Government Admins can manage fees for their Local Government.
     Args:
@@ -875,26 +893,42 @@ def lg_admin_local_government_fee(request, pk):
         status code 200 for GET and PUT requests, and 201 for POST requests.
 
     """
-    if request.method == "GET":
-        lg_id = request.query_params.get("govt_id")
-        fees = LGFee.objects.all()
-        if lg_id:
-            fees = fees.filter(local_government_id=lg_id)
-
-        serializer = LGFeeSerializer(fees, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
+    if request.method == "GET" and not pk:
+        lg = request.query_params.get("lga")
+        if not lg:
+            return Response(
+                {"error": "Local government param not provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        fees = get_object_or_404(LGFee, local_government__name__iexact=lg)
+        check = IsLGAdmin().has_object_permission(request, None, fees)
+        if not check:
+            return Response(
+                {"error": "You are not permitted to view this information"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = LGFeeSerializer(fees)
+        return Response(
+            {"message": "Fee successfully retrieved", "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
     elif request.method == "POST":
         serializer = LGFeeSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(
+                {
+                    "message": "Fee successfully created",
+                    "data": serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == "PUT":
         if not pk:
             return Response(
-                {"error": "LOcal government ID is required for update"},
+                {"error": "Local government name is required for update"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         lg = get_object_or_404(LocalGovernment, id=pk)
@@ -904,8 +938,16 @@ def lg_admin_local_government_fee(request, pk):
         serializer = LGFeeSerializer(fee_obj, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    "message": "Fee successfully created",
+                    "data": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
+        )
 
 
 @api_view(["POST"])
@@ -1087,7 +1129,13 @@ def create_dynamic_response_field(request):
     serializer.is_valid(raise_exception=True)
     serializer.save(created_by=user)
 
-    return Response(serializer.data, status=200)
+    return Response(
+        {
+            "message": "Additional fields successfully created",
+            "data": serializer.data,
+        },
+        status=200,
+    )
 
 
 @api_view(["GET"])
@@ -1123,7 +1171,13 @@ def manage_applications(request):
         request=request,
     )
 
-    return Response(serializer.data, status=200)
+    return Response(
+        {
+            "message": "Application successfully retrieved",
+            "data": serializer.data,
+        },
+        status=200,
+    )
 
 
 @api_view(["GET"])
@@ -1175,7 +1229,13 @@ def manage_all_applicants_application(request):
         request=request,
     )
 
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    return Response(
+        {
+            "message": "Applications successfully retrived",
+            "data": serializer.data,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -1272,7 +1332,6 @@ def manage_single_applicants_application(request, application_id):
     """
     allowed_application_types = ["certificate", "digitization"]
     user = request.user
-    info = get_request_info(request)
 
     if request.method == "GET":
         action_type = "view"
@@ -1316,7 +1375,13 @@ def manage_single_applicants_application(request, application_id):
                 user=user,
                 request=request,
             )
-            return Response(serializer.data, status=200)
+            return Response(
+                {
+                    "message": "Application successfully retrieved",
+                    "data": serializer.data,
+                },
+                status=200,
+            )
 
         elif application_type == "digitization":
             application = get_object_or_404(
@@ -1391,15 +1456,13 @@ def manage_single_applicants_application(request, application_id):
             )
             serializer.is_valid(raise_exception=True)
             serializer.save()
-            AuditLog.objects.create(
+            create_audit_log(
                 description=f"{user.email} {action} {application_type} with {application.id}",
                 table_name="CertificateApplication",
                 action_type=action_type,
-                ip_address=info.get("ip"),
-                user_agent=info.get("user_agent"),
                 user=user,
+                request=request,
             )
-            return Response(serializer.data, status=200)
 
         elif application_type == "digitization":
             application = get_object_or_404(
@@ -1423,7 +1486,20 @@ def manage_single_applicants_application(request, application_id):
             )
             serializer.is_valid(raise_exception=True)
             serializer.save()
-            return Response(serializer.data, status=200)
+            create_audit_log(
+                description=f"{user.email} {action} {application_type} with {application.id}",
+                table_name="DigitizationRequest",
+                action_type=action_type,
+                user=user,
+                request=request,
+            )
+            return Response(
+                {
+                    "message": "Certificate status successfully updated",
+                    "data": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
 
 
 @api_view(["GET"])
@@ -1442,7 +1518,6 @@ def lg_digitization_overview(request):
     user = request.user
     current_month = now().month
     current_year = now().year
-    info = get_request_info(request)
 
     digitizations = DigitizationRequest.objects.filter(
         local_government__in=user.admin_permissions.all().values_list(
@@ -1472,16 +1547,18 @@ def lg_digitization_overview(request):
         "pending_requests": pending_requests,
         "revenue_generated": revenue_generated,
     }
-    AuditLog.objects.create(
+    create_audit_log(
         description=f"{user.email} viewed digitization overview",
         table_name="DigitizationRequest",
         action_type="view",
-        ip_address=info.get("ip"),
-        user_agent=info.get("user_agent"),
         user=user,
+        request=request,
     )
 
-    return Response(data, status=status.HTTP_200_OK)
+    return Response(
+        {"message": "Digitization successfully retrieved", "data": data},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET"])
@@ -1494,7 +1571,6 @@ def lg_admin_dashboard(request):
     user = request.user
     current_week = now() - timedelta(days=7)
     previous_week = current_week - timedelta(days=7)
-    info = get_request_info(request)
 
     applications = CertificateApplication.objects.filter(
         local_government__in=user.admin_permissions.values_list(
@@ -1569,16 +1645,18 @@ def lg_admin_dashboard(request):
         "total_applications": total_applications,
     }
 
-    AuditLog.objects.create(
+    create_audit_log(
         description=f"{user.email} viewed LG admin dashboard",
         table_name="CertificateApplication",
         action_type="view",
-        ip_address=info.get("ip"),
-        user_agent=info.get("user_agent"),
         user=user,
+        request=request,
     )
 
-    return Response(data, status=status.HTTP_200_OK)
+    return Response(
+        {"message": "Dashboard data successfully retrieved", "data": data},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["POST"])
@@ -1593,7 +1671,7 @@ def applicant_digitization_application(request):
             {
                 "error": "Invalid content type - Allowed content type (multipart/form-data"
             },
-            status=400,
+            status=status.HTTP_400_BAD_REQUEST,
         )
     if DigitizationRequest.objects.filter(
         applicant=user, verification_status="approved"
@@ -1630,6 +1708,7 @@ def applicant_digitization_application(request):
         action_type="create",
         table_name="DigitizationRequest",
         description=f"Digitization application initiated by {user.email}",
+        request=request,
     )
     # retrieve the attached price for digitization
     fee = LGFee.objects.filter(
@@ -1637,7 +1716,11 @@ def applicant_digitization_application(request):
     ).first()
     serialized_fee = LGFeeSerializer(fee)
     return Response(
-        {"data": serializer.data, "fee": serialized_fee.data}, status=200
+        {
+            "message": "Digitization request successfully initiated",
+            "data": {"data": serializer.data, "fee": serialized_fee.data},
+        },
+        status=status.HTTP_200_OK,
     )
 
 
@@ -1652,3 +1735,121 @@ def health_check():
     return Response(
         {"status": "Service is running"}, status=status.HTTP_200_OK
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsLGAdmin, IsSuperAdminUser])
+def generate_application_report(request):
+    """
+    Generate report and analytics for applications & digitizations
+
+    """
+    report_type = request.quer_params.get("report_type", "quarterly")
+    user = request.user
+
+    data = generate_report(report_type, user)
+
+    return Response(
+        {"message": "Report successfully generated", "data": data},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsLGAdmin])
+def lg_admin_export_csv(request):
+    user = request.user
+    csv_type = request.query_params.get("type", "").lower().strip()
+    allowed_types = ["applications", "digitizations"]
+    if csv_type not in allowed_types:
+        return Response(
+            {
+                "error": "CSV type missing in query param - ?type=applications or ?type=digitizations"
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    allowed_lg = user.admin_permissions.values_list(
+        "local_government", flat=True
+    )
+    serializer = None
+    if csv_type == "applications":
+        admin_certificates = CertificateApplication.objects.filter(
+            local_government_id__in=allowed_lg
+        )
+        serializer = ApplicationSerializer(admin_certificates, many=True)
+    else:
+        admin_digitizations = DigitizationRequest.objects.filter(
+            local_government_id__in=allowed_lg
+        )
+        serializer = DigitizationRequestSerializer(
+            admin_digitizations, many=True
+        )
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{csv_type}.csv"'
+    writer = csv.writer(response)
+    fields = serializer.data[0].keys() if serializer.data else []
+    writer.writerow(fields)
+    for item in serializer.data:
+        writer.writerow([item.get(f, "") for f in fields])
+    table_name = (
+        "CertificateApplication" if csv_type else "DigitizationRequest"
+    )
+    create_audit_log(
+        request=request,
+        user=user,
+        table_name=table_name,
+        description=f"{user.email} generated csv for {csv_type}",
+        action_type="Create",
+    )
+
+    return response
+
+
+# super admin only views
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsSuperAdminUser])
+def super_admin_dashboard(request):
+    user = request.user
+    pass
+
+
+@api_view(["GET", "POST", "PATCH"])
+@permission_classes([IsAuthenticated, IsSuperAdminUser])
+def manage_local_governments(request):
+    user = request.user
+
+    if request.method == "GET":
+        all_lgs = LocalGovernment.objects.all()
+        serializer = SuperAdminLocalGovernmentSerializer(all_lgs, many=True)
+        create_audit_log(
+            user=user,
+            request=request,
+            action_type="view",
+            table_name="LocalGovernment",
+            description=f"{user.email} viewed all local governments",
+        )
+        return Response(
+            {
+                "message": "All local governments retrieved successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@api_view(["GET"])
+def retrieve_all_states_and_lg(request):
+    all_states = State.objects.all().prefetch_related("local_governments")
+
+    serializer = StateSerializer(all_states, many=True)
+    return Response(
+        {"message": "", "data": serializer.data}, status=status.HTTP_200_OK
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsSuperAdminUser])
+def manage_assigned_local_govt_admin(request):
+    user = request.user
+    data = request.data
