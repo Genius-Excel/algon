@@ -1348,7 +1348,9 @@ def manage_single_applicants_application(request, application_id):
         # filter the applications based on type i.e certificate or digitization
         if application_type not in allowed_application_types:
             return Response(
-                {"error": "Invalid application type"},
+                {
+                    "error": f"Invalid application type - allowed params {", ".join(allowed_application_types)}"
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if application_type == "certificate":
