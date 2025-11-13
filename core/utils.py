@@ -15,6 +15,8 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
+# from core.serializers import FileUploadSerializer
+
 
 def generate_username(length=10):
     """This helper function generates a unique set of
@@ -341,3 +343,11 @@ def extract_upload_file_data(request, files_needed: list[str], instance):
         for file in files_needed
         if files.get(file)
     ]
+
+
+def generate_report(report_type: str, user: User):
+    from .models import CertificateApplication, DigitizationRequest
+
+    if user.role == "lg_admin":
+        pass
+    return

@@ -15,7 +15,6 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
-from django.core.exceptions import PermissionDenied
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.core.validators import validate_email
@@ -1853,3 +1852,5 @@ def retrieve_all_states_and_lg(request):
 def manage_assigned_local_govt_admin(request):
     user = request.user
     data = request.data
+
+    pass
