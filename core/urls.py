@@ -101,7 +101,12 @@ urlpatterns = [
     ),
     path(
         "admin/super/dashboard",
-        views.super_admin_dashboard,
+        views.super_admin_dashboard_overview,
         name="Super admin dashboard",
+    ),
+    path(
+        "admin/super/dashboard-analytics",
+        views.super_admin_dashboard_analytics,
+        name="super admin ashboard analytics",
     ),
 ]

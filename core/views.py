@@ -1,11 +1,12 @@
 import json
 from dateutil.relativedelta import relativedelta
+from django.db.models.functions import TruncMonth
 from rest_framework.pagination import LimitOffsetPagination
 from django.http import HttpResponse
 import csv
 from django.db import transaction
 from django.conf import settings
-from django.db.models import Sum
+from django.db.models import Count, Sum
 from django.http import JsonResponse
 from django.utils.crypto import hashlib, hmac
 from django.utils.decorators import method_decorator
@@ -1732,7 +1733,7 @@ def health_check():
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated, IsLGAdmin, IsSuperAdminUser])
+@permission_classes([IsAuthenticated, IsLGAdmin])
 def generate_application_report(request):
     """
     Generate report and analytics for applications & digitizations
@@ -1805,7 +1806,7 @@ def lg_admin_export_csv(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsSuperAdminUser])
-def super_admin_dashboard(request):
+def super_admin_dashboard_overview(request):
     now = timezone.now()
 
     first_day_this_month = now.replace(
@@ -1843,7 +1844,28 @@ def super_admin_dashboard(request):
         created_at__lt=first_day_this_month,
     ).count()
 
+    certificates = Certificate.objects.all()
+    certificates_issued_last_month = certificates.filter(
+        created_at__gte=first_day_last_month,
+        created_at__lt=first_day_this_month,
+    ).count()
+    certificates_issued_this_month = certificates.filter(
+        created_at__gte=first_day_this_month, created_at__lte=now
+    )
+
     generated_data = {}
+
+    if certificates_issued_last_month > 0:
+        percent_change = (
+            (certificates_issued_this_month - certificates_issued_last_month)
+            / certificates_issued_last_month
+        ) * 100
+        if percent_change >= 0:
+            generated_data["certificate_issued_increase"] = percent_change
+        else:
+            generated_data["certificate_issued_decrease"] = percent_change
+    else:
+        generated_data["certificate_issued_decrease"] = None
 
     # Revenue percentage change (zero-safe)
     if revenue_last_month > 0:
@@ -1881,6 +1903,45 @@ def super_admin_dashboard(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsSuperAdminUser])
+def super_admin_dashboard_analytics(request):
+    """ """
+    now = timezone.now()
+    six_months_ago = now - relativedelta(months=6)
+    monthly_revenue = (
+        Payment.objects.filter(
+            created_at__gte=six_months_ago,
+            payment_status="success",
+            created_at__lte=now,
+        )
+        .annotate(month=TruncMonth("created_at"))
+        .values("month")
+        .annotate(total=Sum("amount"))
+        .order_by("month")
+    )
+    monthly_applications = (
+        CertificateApplication.objects.filter(
+            created_at__gte=six_months_ago, created_at__lte=now
+        )
+        .annotate(month=TruncMonth("created_at"))
+        .values("month")
+        .annotate(total=Count("id"))
+        .order_by("month")
+    )
+
+    return Response(
+        {
+            "message": "Analytics successfully generated",
+            "data": {
+                "monthly_revenue": monthly_revenue,
+                "monthly_applications": monthly_applications,
+            },
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(["GET", "POST", "PATCH"])
 @permission_classes([IsAuthenticated, IsSuperAdminUser])
 def manage_local_governments(request):
@@ -1907,7 +1968,7 @@ def manage_local_governments(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, IsSuperAdminUser])
-def manage_assigned_local_govt_admin(request):
+def create_lg_admin(request):
     user = request.user
     data = request.data
 
@@ -1927,6 +1988,32 @@ def retrieve_all_states_and_lg(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsSuperAdminUser])
 def all_audit_logs(request):
+    """
+    Retrieve all audit logs with pagination for super admin users.
+
+    Query Parameters:
+        - limit (int, optional): The maximum number of audit logs to return per page. Default is 5.
+        - offset (int, optional): The number of audit logs to skip before returning results. Default is 0.
+
+    Permissions:
+        - Requires authentication.
+        - Only accessible by users with super admin privileges.
+
+    Returns:
+        Response: A paginated response containing audit logs and a success message.
+                  Example structure:
+                  {
+                      "message": "Audit logs retrieved successfully",
+                      "data": {
+                          "count": 100,
+                          "next": "http://api.example.com/logs/?limit=5&offset=5",
+                          "previous": null,
+                          "results": [
+                              {...audit log data...}
+                          ]
+                      }
+                  }
+    """
     query_limit = int(request.query_params.get("limit", 5))
     query_offset = int(request.query_params.get("offset", 0))
     all_logs = AuditLog.objects.all()
