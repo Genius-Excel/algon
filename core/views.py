@@ -1,4 +1,6 @@
 import json
+from dateutil.relativedelta import relativedelta
+from rest_framework.pagination import LimitOffsetPagination
 from django.http import HttpResponse
 import csv
 from django.db import transaction
@@ -15,6 +17,7 @@ from rest_framework.decorators import (
     permission_classes,
     throttle_classes,
 )
+from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.core.validators import validate_email
@@ -34,6 +37,7 @@ from core.permissions import (
 )
 from core.tasks import cloudinary_upload_task
 from .models import (
+    AuditLog,
     Certificate,
     CertificateApplication,
     DigitizationPayment,
@@ -60,14 +64,15 @@ from .utils import (
 from .serializers import (
     ApplicationFieldResponseSerializer,
     ApplicationSerializer,
+    AuditLogSerializer,
     DigitizationPaymentSerializer,
     DigitizationRequestSerializer,
     DigitizationSerializer,
     LGDynamicFieldSerializer,
     LGFeeSerializer,
     PaymentSerializer,
-    UserRegistrationSerializer,
     StateSerializer,
+    UserRegistrationSerializer,
     UserLoginSerializer,
     UserLogoutSerializer,
     ChangePasswordSerializer,
@@ -607,9 +612,7 @@ def applicant_certificate_application(request):
         data=request.data, context={"request": request}
     )
     if not serializer.is_valid():
-        return Response(
-            {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     instance = serializer.save(applicant=user)
 
@@ -781,7 +784,7 @@ def certificate_application_second_step(request, application_id):
     return Response(
         {
             "message": "Additional requirements successfully updated",
-            "data": serialized_fee.data,
+            "data": {"fee": serialized_fee.data},
         },
         status=status.HTTP_200_OK,
     )
@@ -884,7 +887,7 @@ def applicant_local_government_fee(request):
 
 @api_view(["GET", "POST", "PUT"])
 @permission_classes([IsAuthenticated, IsLGAdmin])
-def lg_admin_local_government_fee(request, pk=None):
+def lg_admin_local_government_fee(request, pk):
     """
     Local Government Admins can manage fees for their Local Government.
     Args:
@@ -894,21 +897,13 @@ def lg_admin_local_government_fee(request, pk=None):
         status code 200 for GET and PUT requests, and 201 for POST requests.
 
     """
-    if request.method == "GET" and not pk:
-        lg = request.query_params.get("lga")
-        if not lg:
-            return Response(
-                {"error": "Local government param not provided"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        fees = get_object_or_404(LGFee, local_government__name__iexact=lg)
-        check = IsLGAdmin().has_object_permission(request, None, fees)
-        if not check:
-            return Response(
-                {"error": "You are not permitted to view this information"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        serializer = LGFeeSerializer(fees)
+    if request.method == "GET":
+        lg_id = request.query_params.get("govt_id")
+        fees = LGFee.objects.all()
+        if lg_id:
+            fees = fees.filter(local_government_id=lg_id)
+
+        serializer = LGFeeSerializer(fees, many=True)
         return Response(
             {"message": "Fee successfully retrieved", "data": serializer.data},
             status=status.HTTP_200_OK,
@@ -924,14 +919,12 @@ def lg_admin_local_government_fee(request, pk=None):
                 },
                 status=status.HTTP_201_CREATED,
             )
-        return Response(
-            {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == "PUT":
         if not pk:
             return Response(
-                {"error": "Local government name is required for update"},
+                {"error": "LOcal government ID is required for update"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         lg = get_object_or_404(LocalGovernment, id=pk)
@@ -948,9 +941,7 @@ def lg_admin_local_government_fee(request, pk=None):
                 },
                 status=status.HTTP_200_OK,
             )
-        return Response(
-            {"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["POST"])
@@ -1352,9 +1343,7 @@ def manage_single_applicants_application(request, application_id):
         # filter the applications based on type i.e certificate or digitization
         if application_type not in allowed_application_types:
             return Response(
-                {
-                    "error": f"Invalid application type - allowed params {", ".join(allowed_application_types)}"
-                },
+                {"error": "Invalid application type"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if application_type == "certificate":
@@ -1812,11 +1801,84 @@ def lg_admin_export_csv(request):
 
 
 # super admin only views
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsSuperAdminUser])
 def super_admin_dashboard(request):
-    user = request.user
-    pass
+    now = timezone.now()
+
+    first_day_this_month = now.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    first_day_last_month = first_day_this_month - relativedelta(months=1)
+
+    # Payments
+    payments_this_month = Payment.objects.filter(
+        payment_status="success", created_at__gte=first_day_this_month
+    )
+
+    payments_last_month = Payment.objects.filter(
+        payment_status="success",
+        created_at__gte=first_day_last_month,
+        created_at__lt=first_day_this_month,
+    )
+
+    revenue_this_month = (
+        payments_this_month.aggregate(total=Sum("amount"))["total"] or 0
+    )
+    revenue_last_month = (
+        payments_last_month.aggregate(total=Sum("amount"))["total"] or 0
+    )
+
+    # Applications
+    applications = CertificateApplication.objects.all()
+
+    application_count_this_month = applications.filter(
+        created_at__gte=first_day_this_month
+    ).count()
+
+    application_count_last_month = applications.filter(
+        created_at__gte=first_day_last_month,
+        created_at__lt=first_day_this_month,
+    ).count()
+
+    generated_data = {}
+
+    # Revenue percentage change (zero-safe)
+    if revenue_last_month > 0:
+        revenue_percent = (
+            (revenue_this_month - revenue_last_month) / revenue_last_month
+        ) * 100
+
+        if revenue_percent >= 0:
+            generated_data["revenue_percentage_increase"] = revenue_percent
+        else:
+            generated_data["revenue_percentage_decrease"] = revenue_percent
+    else:
+        generated_data["revenue_percentage_change"] = None
+
+    # Application percentage change (zero-safe)
+    if application_count_last_month > 0:
+        app_percent = (
+            (application_count_this_month - application_count_last_month)
+            / application_count_last_month
+        ) * 100
+
+        if app_percent >= 0:
+            generated_data["application_count_increase"] = app_percent
+        else:
+            generated_data["application_count_decrease"] = app_percent
+    else:
+        generated_data["application_count_change"] = None
+
+    return Response(
+        {
+            "message": "Dashboard information successfully generated",
+            "data": generated_data,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET", "POST", "PATCH"])
@@ -1843,16 +1905,6 @@ def manage_local_governments(request):
         )
 
 
-@api_view(["GET"])
-def retrieve_all_states_and_lg(request):
-    all_states = State.objects.all().prefetch_related("local_governments")
-
-    serializer = StateSerializer(all_states, many=True)
-    return Response(
-        {"message": "", "data": serializer.data}, status=status.HTTP_200_OK
-    )
-
-
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, IsSuperAdminUser])
 def manage_assigned_local_govt_admin(request):
@@ -1860,3 +1912,51 @@ def manage_assigned_local_govt_admin(request):
     data = request.data
 
     pass
+
+
+@api_view(["GET"])
+def retrieve_all_states_and_lg(request):
+    all_states = State.objects.all().prefetch_related("local_governments")
+    serializer = StateSerializer(all_states, many=True)
+    return Response(
+        {"message": "Retrieved all states", "data": serializer.data},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsSuperAdminUser])
+def all_audit_logs(request):
+    query_limit = int(request.query_params.get("limit", 5))
+    query_offset = int(request.query_params.get("offset", 0))
+    all_logs = AuditLog.objects.all()
+    paginator = LimitOffsetPagination()
+    paginator.default_limit = query_limit
+    paginator.offset = query_offset
+    paginator.limit = query_limit
+    result_page = paginator.paginate_queryset(all_logs, request)
+
+    serializer = AuditLogSerializer(result_page, many=True)
+
+    paginated_response = paginator.get_paginated_response(serializer.data)
+    return Response(
+        {
+            "message": "Audit logs retrieved successfully",
+            "data": paginated_response.data,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsSuperAdminUser])
+def retrieve_single_audit_log(request, id):
+    audit_log = get_object_or_404(AuditLog, id=id)
+    serializer = AuditLogSerializer(audit_log)
+    return Response(
+        {
+            "message": "Audit log retrieved successfully",
+            "data": serializer.data,
+        },
+        status=status.HTTP_200_OK,
+    )

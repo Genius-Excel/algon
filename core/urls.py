@@ -89,4 +89,19 @@ urlpatterns = [
         views.retrieve_all_states_and_lg,
         name="Retrive all states and associated local governments",
     ),
+    path(
+        "admin/super/audit-logs",
+        views.all_audit_logs,
+        name="View all audit logs",
+    ),
+    path(
+        "admin/super/audit-log/<str:id>",
+        views.retrieve_single_audit_log,
+        name="View all audit logs",
+    ),
+    path(
+        "admin/super/dashboard",
+        views.super_admin_dashboard,
+        name="Super admin dashboard",
+    ),
 ]

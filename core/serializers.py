@@ -12,6 +12,7 @@ from core.models import (
     LocalGovernment,
     Payment,
     State,
+    AuditLog,
 )
 from core.utils import validate_nin_number
 
@@ -412,4 +413,23 @@ class StateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = State
+        fields = "__all__"
+
+    def to_representation(self, instance):
+        instance_repr = super().to_representation(instance)
+        local_governments = instance.local_governments.all()
+        instance_repr["local_governtments"] = [
+            {
+                "id": local_government.id,
+                "name": local_government.name,
+            }
+            for local_government in local_governments
+        ]
+
+        return instance_repr
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AuditLog
         fields = "__all__"
