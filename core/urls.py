@@ -114,4 +114,9 @@ urlpatterns = [
         views.lg_admin_invitation,
         name="Local government invite",
     ),
+    path(
+        "token/verify/<str:token>",
+        views.verify_invite_token,
+        name="Verify invite token",
+    ),
 ]

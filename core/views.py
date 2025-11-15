@@ -1,6 +1,7 @@
 import json
 from dateutil.relativedelta import relativedelta
 from django.db.models.functions import TruncMonth
+from kombu.utils import objects
 from rest_framework.pagination import LimitOffsetPagination
 from django.http import HttpResponse
 import csv
@@ -63,6 +64,7 @@ from .utils import (
     generate_email_confirmation_token,
     send_email_with_html_template,
     generate_report,
+    verify_email_confirmation_token,
 )
 from .serializers import (
     ApplicationFieldResponseSerializer,
@@ -1883,6 +1885,12 @@ def super_admin_dashboard_overview(request):
     else:
         generated_data["revenue_percentage_change"] = None
 
+    # active lgas
+    active_lg_admins = CustomUser.objects.filter(
+        role__name="lg_admin", account_status="active"
+    ).count()
+    generated_data["active_lgas"] = active_lg_admins
+
     # Application percentage change (zero-safe)
     if application_count_last_month > 0:
         app_percent = (
@@ -1967,15 +1975,6 @@ def manage_local_governments(request):
             },
             status=status.HTTP_200_OK,
         )
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated, IsSuperAdminUser])
-def create_lg_admin(request):
-    user = request.user
-    data = request.data
-
-    pass
 
 
 @api_view(["GET"])
@@ -2094,7 +2093,7 @@ def lg_admin_invitation(request):
     subject = "Invitation for thr role of Local government administrator"
     sender_name = "ALGON Admin"
 
-    token = generate_email_confirmation_token(user)
+    token = generate_email_confirmation_token(created_user)
     confirmation_url = f"{settings.FRONTEND_BASE_URL_EMAIL_CONFIRM}/{token}"
     serialized_local_govt_object = serializer.validated_data.get("lga", "")
     serialzied_state_object = serializer.validated_data.get("state", "")
@@ -2108,6 +2107,7 @@ def lg_admin_invitation(request):
         "state_name": serialzied_state_object.name.title(),
         "local_government": serialized_local_govt_object.name.title(),
         "invite_created_date": now().date(),
+        "temporary_password": password,
     }
     sender_name = "Algon Nigeria"
 
@@ -2135,3 +2135,54 @@ def lg_admin_invitation(request):
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["POST"])
+def verify_invite_token(request, token):
+    """
+    Verify the token claim gotten from the invite url sent to the lg admin
+
+    """
+    if not token:
+        return Response(
+            {"error": "No token provided"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    # decode the token
+    verified_token = verify_email_confirmation_token(token)
+    if not verified_token:
+        return Response(
+            {"error": "Invalid Token"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    # check token expiration date
+    from datetime import datetime, timezone
+
+    payload = verified_token.get("payload", "")
+    exp = payload.get("exp")
+    iat = payload.get("iat")
+    issued_at = datetime.fromtimestamp(iat, tz=timezone.utc)
+    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+
+    if datetime.now(timezone.utc) - issued_at > timedelta(days=7):
+        return Response(
+            {"error": "Token expired"}, status=status.HTTP_400_BAD_REQUEST
+        )
+    if datetime.now(timezone.utc) > expires_at:
+        return Response({"error": "Token expired"}, status=400)
+
+    user_id = payload.get("user_id", "")
+    if user_id:
+        user_instance = get_object_or_404(CustomUser, id=user_id)
+        print(user_instance)
+        if verified_token and user_instance.email_verified:
+            return Response(
+                {"message": "User account already verified"},
+                status=status.HTTP_200_OK,
+            )
+        user_instance.email_verified = True
+        user_instance.save()
+        return Response(
+            {
+                "message": "Account verified successfully\nKindly login using the temporary password and reset your password"
+            },
+            status=status.HTTP_200_OK,
+        )
