@@ -11,7 +11,15 @@ import cloudinary
 import cloudinary.uploader
 from core.models import AuditLog
 from django.utils import timezone
+from django.contrib.auth import get_user_model
+from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.exceptions import (
+    TokenError,
+    InvalidToken,
+    TokenError,
+)
 
+User = get_user_model()
 
 # from core.serializers import FileUploadSerializer
 
@@ -47,7 +55,7 @@ def generate_email_confirmation_token(user):
     """
     refresh = RefreshToken.for_user(user)
     refresh.payload["email_confirmation"] = True
-    refresh.set_exp(lifetime=timedelta(seconds=30))
+    refresh.set_exp(lifetime=timedelta(days=7))
     return str(refresh.access_token)
 
 
@@ -71,7 +79,9 @@ def send_email_with_html_template(
     """
 
     try:
-        template_loader = FileSystemLoader(searchpath=Path(__file__).parent)
+        template_loader = FileSystemLoader(
+            searchpath=Path(__file__).parent / "templates"
+        )
         template_env = Environment(loader=template_loader)
 
         template = template_env.get_template(template_file)
@@ -341,3 +351,27 @@ def extract_upload_file_data(request, files_needed: list[str], instance):
         for file in files_needed
         if files.get(file)
     ]
+
+
+def generate_report(report_type: str, user: User):
+
+    if user.role == "lg_admin":
+        pass
+    return
+
+
+def verify_email_confirmation_token(token):
+    """
+    Verifies an email confirmation token and returns the payload if valid.
+    """
+    try:
+        access_token = AccessToken(
+            token
+        )  # automatically verifies signature & expiry
+        if access_token.get("email_confirmation"):
+            return access_token.__dict__  # payload as dict-like object
+        else:
+            raise InvalidToken("Token is not for email confirmation")
+    except TokenError as e:
+        # Handle expired or invalid token
+        raise InvalidToken(str(e))

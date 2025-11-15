@@ -1,9 +1,11 @@
 from django.utils import timezone
 from rest_framework import serializers
+from django.db.models import Count
 
 from core.models import (
     ApplicationFieldResponse,
     CertificateApplication,
+    CustomUser,
     DigitizationPayment,
     DigitizationRequest,
     LGDynamicField,
@@ -11,6 +13,7 @@ from core.models import (
     LocalGovernment,
     Payment,
     State,
+    AuditLog,
 )
 from core.utils import validate_nin_number
 
@@ -375,3 +378,103 @@ class DigitizationSerializer(serializers.ModelSerializer):
                 "name": instance.local_government.state.name or "",
             }
         return representation
+
+
+class SuperAdminLocalGovernmentSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = LocalGovernment
+        fields = "__all__"
+
+    def to_representation(self, instance):
+        instance_representation = super().to_representation(instance)
+        admin = instance.admin_permissions.first()
+        if admin:
+            instance_representation["asigned_admin"] = {
+                "id": admin.admin.id,
+                "name": admin.admin.get_full_name(),
+                "email": admin.admin.email,
+            }
+        instance_representation["state"] = {
+            "name": instance.state.name,
+            "id": instance.state.id,
+        }
+        certificates = (
+            instance.certificates.all()
+            .values("application_status")
+            .annotate(total=Count("id"))
+        )
+
+        instance_representation["certificates"] = certificates
+
+        return instance_representation
+
+
+class StateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = State
+        fields = "__all__"
+
+    def to_representation(self, instance):
+        instance_repr = super().to_representation(instance)
+        local_governments = instance.local_governments.all()
+        instance_repr["local_governtments"] = [
+            {
+                "id": local_government.id,
+                "name": local_government.name,
+            }
+            for local_government in local_governments
+        ]
+
+        return instance_repr
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AuditLog
+        fields = "__all__"
+
+
+class LgAdminInviteSerializer(serializers.Serializer):
+    state = serializers.PrimaryKeyRelatedField(
+        queryset=State.objects.all(), required=True
+    )
+    lga = serializers.PrimaryKeyRelatedField(
+        queryset=LocalGovernment.objects.all(), required=True
+    )
+    full_name = serializers.CharField(required=True)
+    email = serializers.EmailField()
+
+    def validate_full_name(self, value):
+        # check that the full_name contains all string
+        if value.isdigit():
+            raise serializers.ValidationError(
+                "Full name should contain characters only"
+            )
+        # check that a full name is provided
+        split_name = value.split(" ")
+        if len(split_name) < 2:
+            raise serializers.ValidationError(
+                "First name and last name should be provided"
+            )
+
+        return value
+
+    def validate_email(self, value):
+        # validate that there is no user with this email
+        clean_value = value.strip()
+        if CustomUser.objects.filter(email__iexact=clean_value).first():
+            raise serializers.ValidationError("User with email already exists")
+        return value
+
+    def validate(self, attrs):
+        """final validation before returning to the view"""
+        # TODO: validate that the local government is under the provided state
+        validated_state = attrs.get("state")
+        validated_lga = attrs.get("lga")
+        if validated_state != validated_lga.state:
+            raise serializers.ValidationError(
+                "Local government provided does not exist/belong to provided state"
+            )
+        return attrs

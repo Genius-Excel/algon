@@ -7,6 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config("SECRET_KEY")
 
+DEV_MODE = config("DEV_MODE")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG", default=False, cast=bool)
 
@@ -15,6 +16,7 @@ PAYSTACK_PUBLIC_KEY = config("PAYSTACK_PUBLIC_KEY")
 ALLOWED_HOSTS = config(
     "ALLOWED_HOSTS", cast=lambda v: [s.strip() for s in v.split(",")]
 )
+FRONTEND_BASE_URL_EMAIL_CONFIRM = config("FRONTEND_URL")
 
 # Application definition
 
@@ -77,10 +79,11 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "algon.urls"
 
+print(BASE_DIR)
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
+        "DIRS": [BASE_DIR / "core" / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -229,7 +232,11 @@ USE_I18N = True
 
 USE_TZ = True
 
-
+EMAIL_BACKEND = (
+    "django.core.mail.backends.smtp.EmailBackend"
+    if DEV_MODE == "production"
+    else "django.core.mail.backends.console.EmailBackend"
+)
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
