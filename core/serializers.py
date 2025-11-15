@@ -5,6 +5,7 @@ from django.db.models import Count
 from core.models import (
     ApplicationFieldResponse,
     CertificateApplication,
+    CustomUser,
     DigitizationPayment,
     DigitizationRequest,
     LGDynamicField,
@@ -433,3 +434,47 @@ class AuditLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AuditLog
         fields = "__all__"
+
+
+class LgAdminInviteSerializer(serializers.Serializer):
+    state = serializers.PrimaryKeyRelatedField(
+        queryset=State.objects.all(), required=True
+    )
+    lga = serializers.PrimaryKeyRelatedField(
+        queryset=LocalGovernment.objects.all(), required=True
+    )
+    full_name = serializers.CharField(required=True)
+    email = serializers.EmailField()
+
+    def validate_full_name(self, value):
+        # check that the full_name contains all string
+        if value.isdigit():
+            raise serializers.ValidationError(
+                "Full name should contain characters only"
+            )
+        # check that a full name is provided
+        split_name = value.split(" ")
+        if len(split_name) < 2:
+            raise serializers.ValidationError(
+                "First name and last name should be provided"
+            )
+
+        return value
+
+    def validate_email(self, value):
+        # validate that there is no user with this email
+        clean_value = value.strip()
+        if CustomUser.objects.filter(email__iexact=clean_value).first():
+            raise serializers.ValidationError("User with email already exists")
+        return value
+
+    def validate(self, attrs):
+        """final validation before returning to the view"""
+        # TODO: validate that the local government is under the provided state
+        validated_state = attrs.get("state")
+        validated_lga = attrs.get("lga")
+        if validated_state != validated_lga.state:
+            raise serializers.ValidationError(
+                "Local government provided does not exist/belong to provided state"
+            )
+        return attrs

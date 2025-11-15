@@ -49,7 +49,7 @@ def generate_email_confirmation_token(user):
     """
     refresh = RefreshToken.for_user(user)
     refresh.payload["email_confirmation"] = True
-    refresh.set_exp(lifetime=timedelta(seconds=30))
+    refresh.set_exp(lifetime=timedelta(days=7))
     return str(refresh.access_token)
 
 
@@ -73,10 +73,14 @@ def send_email_with_html_template(
     """
 
     try:
-        template_loader = FileSystemLoader(searchpath=Path(__file__).parent)
+        template_loader = FileSystemLoader(
+            searchpath=Path(__file__).parent / "templates"
+        )
         template_env = Environment(loader=template_loader)
+        print(template_loader, template_env)
 
         template = template_env.get_template(template_file)
+        print("This is the template: ", template)
         html_content = template.render(template_context)
 
     except Exception as e:

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Your Admin Invitation</title>
+	<style>
+		body {
+			font-family: Arial, sans-serif;
+			background-color: #f3f4f6;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			min-height: 100vh;
+			margin: 0;
+			padding: 20px;
+		}
+
+		.container {
+			max-width: 650px;
+			background: #ffffff;
+			padding: 30px;
+			border-radius: 8px;
+			box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+			text-align: center;
+		}
+
+		.logo img {
+			max-width: 140px;
+			margin-bottom: 10px;
+		}
+
+		.verification-box {
+			background: #eef1f4;
+			padding: 2.5rem 2rem;
+			border-radius: 8px;
+			margin: 25px 0;
+		}
+
+		h1 {
+			font-size: 22px;
+			color: #222;
+			margin-bottom: 10px;
+		}
+
+		p {
+			font-size: 15px;
+			color: #444;
+			line-height: 1.6;
+		}
+
+		.details-box {
+			text-align: left;
+			margin-top: 20px;
+			font-size: 14px;
+			background: #fff;
+			padding: 15px;
+			border-radius: 5px;
+			border: 1px solid #ddd;
+		}
+
+		.details-box strong {
+			color: #000;
+		}
+
+		.btn-container {
+			margin-top: 25px;
+		}
+
+		.verify-btn {
+			background-color: #FF4101;
+			color: white;
+			padding: 12px 28px;
+			font-size: 16px;
+			border: none;
+			text-decoration: none;
+			border-radius: 6px;
+			cursor: pointer;
+			display: inline-block;
+			transition: background 0.3s ease;
+		}
+
+		.verify-btn:hover {
+			background-color: #d93600;
+		}
+
+		.footer-text {
+			margin-top: 30px;
+			font-size: 12px;
+			color: #555;
+			line-height: 1.5;
+		}
+
+		.small-note {
+			color: #777;
+			font-size: 12px;
+			margin-top: 8px;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="container">
+
+		<div class="logo">
+			<img src="https://res.cloudinary.com/daf7mvn2b/image/upload/v1739451753/Meerge%20Africa%20Supplier%20Media/om4efcv8zbbordpkh2hn.png"
+				alt="Company Logo">
+		</div>
+
+		<div class="verification-box">
+			<h1>{{business_name}} has invited you to serve as a Local Government Admin</h1>
+
+			<p>
+				You have been selected to join the administrative team for:
+			</p>
+
+			<div class="details-box">
+				<p><strong>State:</strong> {{state_name}}</p>
+				<p><strong>Local Government:</strong> {{local_government}}</p>
+				<p><strong>Role:</strong> Local Government Admin</p>
+				<p><strong>Invite created on:</strong> {{invite_created_date}}</p>
+				<p><strong>Expires in:</strong> 7 days</p>
+			</div>
+
+			<p>
+				To begin your registration and activate your admin account, click the button below.
+			</p>
+
+			<div class="btn-container">
+				<a class="verify-btn" href="{{confirmation_url}}">Accept Invitation</a>
+			</div>
+
+			<p class="small-note">
+				The invitation link will automatically expire after 7 days for security reasons.
+			</p>
+		</div>
+
+		<div class="footer-text">
+			This is an automated email regarding administrative access to the Merge platform.
+			If you believe this email was sent in error, please contact support immediately.
+		</div>
+
+	</div>
+</body>
+
+</html>

@@ -109,4 +109,9 @@ urlpatterns = [
         views.super_admin_dashboard_analytics,
         name="super admin ashboard analytics",
     ),
+    path(
+        "admin/super/invite-lg",
+        views.lg_admin_invitation,
+        name="Local government invite",
+    ),
 ]

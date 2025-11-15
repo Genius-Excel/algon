@@ -38,9 +38,11 @@ from core.permissions import (
 )
 from core.tasks import cloudinary_upload_task
 from .models import (
+    AdminPermission,
     AuditLog,
     Certificate,
     CertificateApplication,
+    CustomUser,
     DigitizationPayment,
     DigitizationRequest,
     LGDynamicField,
@@ -71,6 +73,7 @@ from .serializers import (
     DigitizationSerializer,
     LGDynamicFieldSerializer,
     LGFeeSerializer,
+    LgAdminInviteSerializer,
     PaymentSerializer,
     StateSerializer,
     UserRegistrationSerializer,
@@ -2046,4 +2049,89 @@ def retrieve_single_audit_log(request, id):
             "data": serializer.data,
         },
         status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsSuperAdminUser])
+def lg_admin_invitation(request):
+    """
+    Handles the invitation of an lg admin by a super admin.
+    Args:
+        request (Request): The HTTP request object containing lg_admin data.
+    Returns:
+        Response: A Response object containing a success message and HTTP status code 201 if the invitation is successfully sent.
+                A Response object containing an error message and appropriate HTTP status code if there are validation errors or if the user already exists.
+    Raises:
+        ValidationError: If the provided email address is invalid.
+        ObjectDoesNotExist: If there is an error checking for existing users in the database.
+    """
+
+    user = request.user
+    serializer = LgAdminInviteSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    # check that there is the lg_admin in the db else create
+    role, created = Role.objects.get_or_create(name="lg_admin")
+
+    password = generate_random_id(length=8)
+    serializer.validated_data.update({"role": role if role else created})
+    first_name, last_name = serializer.validated_data.get("full_name").split(
+        " "
+    )
+    email = serializer.validated_data.get("email", "")
+    created_user = CustomUser.objects.create(
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+    )
+    created_user.role = role if role else created
+    # create a signal to automatically assign the admin to state with admin permissions
+
+    created_user.set_password(password)
+    created_user.save()
+    template_file = "/core/lg-invitation.html"
+    subject = "Invitation for thr role of Local government administrator"
+    sender_name = "ALGON Admin"
+
+    token = generate_email_confirmation_token(user)
+    confirmation_url = f"{settings.FRONTEND_BASE_URL_EMAIL_CONFIRM}/{token}"
+    serialized_local_govt_object = serializer.validated_data.get("lga", "")
+    serialzied_state_object = serializer.validated_data.get("state", "")
+
+    # send email to user
+    subject = "Email Confirmation"
+    template_file = "lg-invitation.html"
+    template_context = {
+        "business_name": "Algon Nig",
+        "confirmation_url": confirmation_url,
+        "state_name": serialzied_state_object.name.title(),
+        "local_government": serialized_local_govt_object.name.title(),
+        "invite_created_date": now().date(),
+    }
+    sender_name = "Algon Nigeria"
+
+    email_status = send_email_with_html_template(
+        template_file, template_context, email, subject, sender_name
+    )
+    admin_permission = AdminPermission.objects.create(
+        admin=created_user, local_government=serialized_local_govt_object
+    )
+    admin_permission.save()
+    return Response(
+        {
+            "message": f"{user.role.name} account created successfully!",
+            "email_status": email_status,
+            "data": [
+                {
+                    "user_id": created_user.id,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "email": created_user.email,
+                    "role": created_user.role.name,
+                    "email_verified": created_user.email_verified,
+                }
+            ],
+        },
+        status=status.HTTP_201_CREATED,
     )

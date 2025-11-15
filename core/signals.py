@@ -8,8 +8,10 @@ from django.dispatch import receiver
 from core.utils import generate_random_id
 
 from .models import (
+    AdminPermission,
     Certificate,
     CertificateApplication,
+    CustomUser,
     DigitizationCertificate,
     DigitizationRequest,
 )
@@ -45,3 +47,15 @@ def create_certificate(sender, instance, created, **kwargs):
             expiry_date=expiry_date,
             issue_date=current_date,
         )
+
+
+@receiver(post_save, sender=CustomUser)
+def create_admin_permission_on_acceptance(sender, instance, created, **kwargs):
+    if instance:
+        user_role = getattr(instance.role, "name", "")
+        if user_role != "lg_admin":
+            return
+        if instance.email_verified:
+            # TODO: find the related state and lg
+            admin_permission = AdminPermission.objects.create()
+            admin_permission.save()
